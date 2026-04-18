@@ -55,6 +55,13 @@ class CameraEngine(
         private const val AHEAD_ANGLE = 40.0
         /** 차량→카메라 방위가 진행 방향과 이 각도(°) 이내면 전방(측면·반대차선 억제 강화) */
         private const val FORWARD_TO_CAM_DEG = 25.0
+        /** OSRM 도착 접근 방향: 카메라 직전 50m 이상 구간으로 베어링 계산 */
+        private const val APPROACH_LOOKBACK_M = 50.0
+        /** 도착 접근 방향 vs 차량 bearing 최대 허용 편차(교차로 우회·수직 도로 단속 억제) */
+        private const val APPROACH_MAX_BEARING_DIFF_DEG = 60.0
+        /** 경로 상 최대 회전각: 초과 시 교차로 회전 포함으로 보고 후보 제외 */
+        private const val ROUTE_MAX_TURN_FOR_STRAIGHT_DEG = 50.0
+        private const val MIN_ROUTE_SEGMENT_FOR_TURN_M = 10.0
 
         /** 라우팅 API 실패 시 직선 fallback — 매우 보수적(평행도로 오탐 방지) */
         private const val FALLBACK_MAX_STRAIGHT_M = 300.0
@@ -502,16 +509,34 @@ class CameraEngine(
                     }
                     if (curBearingValid && route.routePoints.size >= 2) {
                         val pts = route.routePoints
-                        val p0 = pts[pts.size - 2]
-                        val p1 = pts[pts.size - 1]
-                        val approachBearing = bearingBetween(p0.lat, p0.lon, p1.lat, p1.lon)
+                        val last = pts.last()
+                        var approachFrom = pts[pts.size - 2]
+                        for (i in pts.size - 2 downTo 0) {
+                            val d = distanceBetween(pts[i].lat, pts[i].lon, last.lat, last.lon)
+                            if (d >= APPROACH_LOOKBACK_M) {
+                                approachFrom = pts[i]
+                                break
+                            }
+                        }
+                        val approachBearing = bearingBetween(approachFrom.lat, approachFrom.lon, last.lat, last.lon)
                         val approachDiff = angleDiff(curBearing, approachBearing)
-                        if (approachDiff > 90.0) {
+                        if (approachDiff > APPROACH_MAX_BEARING_DIFF_DEG) {
                             Log.d(
                                 TAG,
                                 "  → 도착방향 불일치: 접근=${"%.0f".format(Locale.US, approachBearing)}° " +
                                     "내bearing=${"%.0f".format(Locale.US, curBearing)}° " +
                                     "Δ=${"%.0f".format(Locale.US, approachDiff)}° 스킵"
+                            )
+                            continue
+                        }
+                    }
+                    if (curBearingValid && route.routePoints.size >= 3) {
+                        val maxTurnInRoute = maxTurnAngleInRoute(route.routePoints)
+                        if (maxTurnInRoute > ROUTE_MAX_TURN_FOR_STRAIGHT_DEG) {
+                            Log.d(
+                                TAG,
+                                "  → 경로 내 회전 ${"%.0f".format(Locale.US, maxTurnInRoute)}° > " +
+                                    "${ROUTE_MAX_TURN_FOR_STRAIGHT_DEG.toInt()}° 스킵 (교차로 카메라)"
                             )
                             continue
                         }
@@ -803,6 +828,31 @@ class CameraEngine(
     private fun angleDiff(a: Double, b: Double): Double {
         val diff = abs(a - b) % 360.0
         return if (diff > 180.0) 360.0 - diff else diff
+    }
+
+    /**
+     * 경로 좌표에서 연속 세그먼트 간 최대 방향 변화각.
+     * [ROUTE_MAX_TURN_FOR_STRAIGHT_DEG] 이상이면 교차로 회전이 포함된 경로로 간주.
+     */
+    private fun maxTurnAngleInRoute(points: List<MapboxRouter.LatLon>): Double {
+        if (points.size < 3) return 0.0
+        var maxAngle = 0.0
+        var prevBearing = bearingBetween(points[0].lat, points[0].lon, points[1].lat, points[1].lon)
+        for (i in 1 until points.size - 1) {
+            val segDist = distanceBetween(
+                points[i].lat, points[i].lon,
+                points[i + 1].lat, points[i + 1].lon
+            )
+            if (segDist < MIN_ROUTE_SEGMENT_FOR_TURN_M) continue
+            val newBearing = bearingBetween(
+                points[i].lat, points[i].lon,
+                points[i + 1].lat, points[i + 1].lon
+            )
+            val turn = angleDiff(prevBearing, newBearing)
+            if (turn > maxAngle) maxAngle = turn
+            prevBearing = newBearing
+        }
+        return maxAngle
     }
 }
 
