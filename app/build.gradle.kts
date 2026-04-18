@@ -37,8 +37,8 @@ android {
         applicationId = "com.teslcan.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.0.1"
 
         buildConfigField(
             "String",
@@ -56,6 +56,9 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
+            // Play 스토어용 릴리스 키가 없을 때: 설치 가능한 배포용 APK (내부/테스트).
+            // 스토어 업로드 전에 release 서명으로 교체하세요.
+            signingConfig = signingConfigs.getByName("debug")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
