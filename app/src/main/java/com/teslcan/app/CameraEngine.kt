@@ -24,7 +24,7 @@ data class AlertInfo(
     /** 레거지 CamAlert: 1000/500/300/100 구간 중 이번 틱에 새로 진입한 구간(음성 1회). 0이면 없음 */
     val zoneTriggered: Int = 0,
     val rawDistance: Int = distance,
-    val d1: Int = 1100,
+    val d1: Int = 600,
     val d2: Int = 100
 ) {
     val camType: Int get() = safetyCode.toLegacyCamType()
@@ -42,8 +42,8 @@ class CameraEngine(
         private const val TAG = "CameraEngine"
 
         private const val SCAN_RADIUS = 1500
-        private const val ALERT_DISTANCE = 1100
-        private const val LOST_DISTANCE = 1300
+        private const val ALERT_DISTANCE = 600
+        private const val LOST_DISTANCE = 800
         private const val COOLDOWN_MS = 60_000L
         private const val PASS_DISTANCE = 50.0
 
@@ -55,7 +55,8 @@ class CameraEngine(
         private const val MIN_MOVE_FOR_BEARING = 5.0
         private const val TRACKING_GRACE_MS = 8000L
 
-        private val ALERT_ZONES = intArrayOf(1000, 500, 300, 100)
+        /** 최대 알림 반경(ALERT_DISTANCE)과 맞춤. UI의 1km 스위치는 600m 구간에 매핑 */
+        private val ALERT_ZONES = intArrayOf(600, 500, 300, 100)
         private const val BEARING_HISTORY_SIZE = 5
 
         /** 제한속도가 0이면 후보에서 제외하는 타입(CSV 누락 시). 신호·구간·어린이 등은 0이어도 유지 */
@@ -327,7 +328,9 @@ class CameraEngine(
                 } else {
                     val fd = candidate.dist * 1.3
                     Log.d(TAG, "  API 실패 → 직선 fallback ${candidate.dist.toInt()}m (도로산 ${fd.toInt()}m)")
-                    if (candidate.dist <= ALERT_DISTANCE) {
+                    val allowFallback = candidate.dist <= ALERT_DISTANCE &&
+                        (!curBearingValid || candidate.angleDiff <= AHEAD_ANGLE)
+                    if (allowFallback) {
                         bestCam = candidate.cam
                         bestRoute = MapboxRouter.RouteResult(
                             roadDistance = fd,
@@ -336,8 +339,18 @@ class CameraEngine(
                             success = false
                         )
                         bestStraight = candidate.dist
-                        Log.d(TAG, "  → fallback 확정! ${fd.toInt()}m")
+                        Log.d(
+                            TAG,
+                            "  → fallback 확정! ${fd.toInt()}m (각도 ${"%.0f".format(Locale.US, candidate.angleDiff)}°)"
+                        )
                         break
+                    } else {
+                        Log.d(
+                            TAG,
+                            "  → fallback 기각 dist=${candidate.dist.toInt()}m angle=${
+                                "%.0f".format(Locale.US, candidate.angleDiff)
+                            }° (베어링유효=$curBearingValid)"
+                        )
                     }
                 }
             }
@@ -520,8 +533,7 @@ class CameraEngine(
             roadDistInt <= 100 -> 4
             roadDistInt <= 300 -> 3
             roadDistInt <= 500 -> 2
-            roadDistInt <= 1000 -> 1
-            roadDistInt <= ALERT_DISTANCE -> -1
+            roadDistInt <= ALERT_DISTANCE -> 1
             else -> 0
         }
         val onViolation = cam.speedLimit > 0 && speedKmh > cam.speedLimit + overThreshold
@@ -550,7 +562,8 @@ class CameraEngine(
             isSection = sectionEntry != null,
             sectionAvgSpeed = sectionAvg,
             zoneTriggered = zoneTriggered,
-            rawDistance = rawDist.coerceAtLeast(0)
+            rawDistance = rawDist.coerceAtLeast(0),
+            d1 = ALERT_DISTANCE
         )
     }
 

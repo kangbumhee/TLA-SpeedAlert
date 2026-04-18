@@ -493,11 +493,6 @@ class BleService : Service() {
                 overspeedLogActive = false
             }
 
-            // 1000~1100m: 대시보드·지도만, 구간 음성(handleSafetyAlert) 생략
-            if (r.phase == -1) {
-                return@post
-            }
-
             if (r.phase >= 1) {
                 alertPlayer.handleSafetyAlert(r, currentSpeed)
                 if (r.zoneTriggered > 0) {

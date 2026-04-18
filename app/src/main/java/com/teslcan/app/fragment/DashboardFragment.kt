@@ -178,29 +178,6 @@ class DashboardFragment : Fragment() {
 
         val displayMeters = roundedAlertMeters(info.distance)
 
-        if (info.phase == -1) {
-            tvAlertDistance.text = "${displayMeters}m"
-            val d1 = 1100
-            val pct = ((1f - displayMeters.toFloat() / d1) * 100).toInt().coerceIn(0, 100)
-            progressDistance.progress = pct
-            if (info.speedLimit > 0) {
-                tvLimit.text = "${info.speedLimit}"
-                limitSign.visibility = View.VISIBLE
-            }
-            val displayPhase = if (lastUiPhase in 1..4) lastUiPhase else 2
-            applyPhaseColors(displayPhase, info)
-            tvAlertTitle.text = "접근 중 (음성 없음)"
-            tvAlertTitle.setTextColor(Color.parseColor("#8B949E"))
-            if (mapReady && info.camLat != 0.0 && info.camLon != 0.0) {
-                val os = if (info.overspeed) 1 else 0
-                mapView.evaluateJavascript(
-                    "showCamera(${info.camLat},${info.camLon},${info.safetyCode.code},${info.speedLimit},${info.distance},1,$os);",
-                    null
-                )
-            }
-            return
-        }
-
         if (info.phase in 1..4) lastUiPhase = info.phase
 
         if (mapReady && info.phase in 1..4 && info.camLat != 0.0 && info.camLon != 0.0) {
@@ -238,7 +215,7 @@ class DashboardFragment : Fragment() {
         tvCamType.text = "「${info.safetyCode.label}」"
         tvAlertDistance.text = "${displayMeters}m"
 
-        val d1 = 1100
+        val d1 = info.d1.coerceAtLeast(100)
         val pct = ((1f - displayMeters.toFloat() / d1) * 100).toInt().coerceIn(0, 100)
         progressDistance.progress = pct
 

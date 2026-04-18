@@ -495,6 +495,14 @@
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="재생 배속(0.5x~3x)은 시뮬 실행 중에만 적용됩니다. 시작 시 1x로 초기화되므로, 시작 후 버튼을 눌러 주세요."
+                android:textColor="#6E7681"
+                android:textSize="10sp" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
                 android:layout_marginTop="12dp"
                 android:text="시뮬 차량 속도 설정"
                 android:textColor="#8B949E"

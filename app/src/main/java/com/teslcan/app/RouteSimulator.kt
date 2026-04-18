@@ -61,8 +61,8 @@ class RouteSimulator {
     var onRouteReady: ((pointCount: Int, distanceKm: Double) -> Unit)? = null
 
     /**
-     * 재생 속도 배율 (틱 간격만 조절, 웨이포인트 표기 속도는 그대로).
-     * 1.0 = 1초마다 한 포인트, 2.0 = 약 0.5초마다.
+     * 재생 속도 배율 (틱 간격). 1.0 = 1초마다 한 포인트, 2.0 ≈ 0.5초마다.
+     * [speedOverrideKmh]가 null일 때는 한 틱당 한 포인트만 전진하며, 오버라이드 시에는 틱당 이동거리만큼 경로를 따라 여러 세그먼트를 전진합니다.
      */
     var speedMultiplier: Double = 1.0
         set(value) {
@@ -231,10 +231,38 @@ class RouteSimulator {
                 onSimulationEnd?.invoke()
                 return
             }
-            val p = routePoints[currentIndex]
-            val effectiveSpeed = speedOverrideKmh ?: p.speedKmh
-            onLocationUpdate?.invoke(p.lat, p.lon, effectiveSpeed, 12, true, p.bearing)
-            currentIndex++
+            val overrideKmh = speedOverrideKmh
+            if (overrideKmh != null && overrideKmh > 0) {
+                val tickSec = getTickIntervalMs() / 1000.0
+                val targetDist = (overrideKmh / 3.6) * tickSec
+                var distAccum = 0.0
+                var idx = currentIndex
+                while (idx < routePoints.size - 1 && distAccum < targetDist) {
+                    distAccum += haversine(
+                        routePoints[idx].lat, routePoints[idx].lon,
+                        routePoints[idx + 1].lat, routePoints[idx + 1].lon
+                    )
+                    idx++
+                }
+                currentIndex = idx.coerceAtMost(routePoints.size - 1)
+                val p = routePoints[currentIndex]
+                val br = if (currentIndex > 0) {
+                    calcBearing(
+                        routePoints[currentIndex - 1].lat, routePoints[currentIndex - 1].lon,
+                        p.lat, p.lon
+                    )
+                } else {
+                    p.bearing
+                }
+                onLocationUpdate?.invoke(p.lat, p.lon, overrideKmh, 12, true, br)
+                if (currentIndex >= routePoints.size - 1) {
+                    currentIndex = routePoints.size
+                }
+            } else {
+                val p = routePoints[currentIndex]
+                onLocationUpdate?.invoke(p.lat, p.lon, p.speedKmh, 12, true, p.bearing)
+                currentIndex++
+            }
             handler.postDelayed(this, getTickIntervalMs())
         }
     }
