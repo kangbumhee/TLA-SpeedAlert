@@ -294,8 +294,10 @@ class DashboardFragment : Fragment() {
 <style>
 body{margin:0;background:#0D1117}
 #map{width:100%;height:100vh}
-.cam-div-icon{background:transparent!important;border:none!important;}
-.cam-nearby{background:transparent!important;border:none!important;}
+.cam-div-icon,.cam-nearby,.user-pos-icon{background:transparent!important;border:none!important;}
+.cam-div-icon.leaflet-marker-icon,.cam-nearby.leaflet-marker-icon,.user-pos-icon.leaflet-marker-icon{
+  background:transparent!important;background-image:none!important;border:0!important;box-shadow:none!important;
+}
 </style>
 </head><body><div id="map"></div>
 <script>
@@ -322,10 +324,10 @@ var kakaoCfg={
 var legacyCfg={
   0:{color:'#FF4444',icon:'\u26A1',label:'\uACFC\uC18D'},
   1:{color:'#FF4444',icon:'\uD83D\uDCF7',label:'\uACE0\uC815'},
-  2:{color:'#4488FF',icon:'\uD83D\uDCE6',label:'\uC774\uB3D9'},
+  2:{color:'#00838F',icon:'\uD83D\uDCE6',label:'\uC774\uB3D9'},
   3:{color:'#FF8800',icon:'\u23F1',label:'\uAD6C\uAC04'},
   4:{color:'#FFDD00',icon:'\uD83D\uDEA6',label:'\uC2E0\uD638'},
-  5:{color:'#4488FF',icon:'\uD83D\uDE8C',label:'\uBC84\uC2A4'},
+  5:{color:'#5D4037',icon:'\uD83D\uDE8C',label:'\uBC84\uC2A4'},
   6:{color:'#39D353',icon:'\uD83C\uDFEB',label:'\uC5B4\uB9B0\uC774'}
 };
 function pickCfg(code){
@@ -359,8 +361,11 @@ function updateLine(){
   if(alertLine&&marker&&camMarker) alertLine.setLatLngs([marker.getLatLng(),camMarker.getLatLng()]);
 }
 function updateLocation(lat,lon){
-  if(!marker) marker=L.circleMarker([lat,lon],{radius:9,color:'#39D353',fillColor:'#39D353',fillOpacity:0.9}).addTo(map);
-  else marker.setLatLng([lat,lon]);
+  if(!marker){
+    var mh='<div style="width:18px;height:18px;background:#39D353;border:2px solid #fff;border-radius:50%;box-shadow:0 1px 4px rgba(0,0,0,0.45);"></div>';
+    var mic=L.divIcon({html:mh,iconSize:[18,18],iconAnchor:[9,9],className:'user-pos-icon'});
+    marker=L.marker([lat,lon],{icon:mic,interactive:false,zIndexOffset:1000}).addTo(map);
+  } else marker.setLatLng([lat,lon]);
   if(!camMarker) map.setView([lat,lon],16);
   updateLine();
 }
