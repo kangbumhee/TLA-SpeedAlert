@@ -56,6 +56,14 @@ class CameraEngine(
         private val ALERT_ZONES = intArrayOf(1000, 500, 300, 100)
         private const val BEARING_HISTORY_SIZE = 5
 
+        /** 제한속도가 0이면 후보에서 제외하는 타입(CSV 누락 시). 신호·구간·어린이 등은 0이어도 유지 */
+        private val SPEED_LIMIT_REQUIRED_IF_ZERO = setOf(
+            SafetyCode.FIXED_SPEED,
+            SafetyCode.MOVABLE_SPEED,
+            SafetyCode.BOXED_SPEED,
+            SafetyCode.BACKWARD_SPEED
+        )
+
         private fun camTypePriority(legacyType: Int): Int = when (legacyType) {
             6 -> 0
             3 -> 1
@@ -201,7 +209,7 @@ class CameraEngine(
         for (cam in allCameras) {
             if (!isAlertTarget(cam.safetyCode, cam.speedLimit)) continue
             if (!DrivingProfile.isTypeEnabled(cam.safetyCode.toLegacyCamType(), settings)) continue
-            if (cam.speedLimit <= 0 && cam.safetyCode != SafetyCode.SIGNAL) continue
+            if (cam.speedLimit <= 0 && cam.safetyCode in SPEED_LIMIT_REQUIRED_IF_ZERO) continue
             if (isInCooldown(cam)) continue
 
             val dist = distanceBetween(lat, lon, cam.lat, cam.lon)
@@ -309,7 +317,20 @@ class CameraEngine(
                     Log.d(TAG, "  ✓ 확정! ${route.roadDistance.toInt()}m")
                     break
                 } else {
-                    Log.d(TAG, "  API 실패 → 스킵")
+                    val fd = candidate.dist * 1.3
+                    Log.w(TAG, "  API 실패 → 직선 fallback ${candidate.dist.toInt()}m (도로환산 ${fd.toInt()}m)")
+                    if (candidate.dist <= ALERT_DISTANCE) {
+                        bestCam = candidate.cam
+                        bestRoute = MapboxRouter.RouteResult(
+                            roadDistance = fd,
+                            straightDistance = candidate.dist,
+                            routePoints = emptyList(),
+                            success = false
+                        )
+                        bestStraight = candidate.dist
+                        Log.d(TAG, "  ✓ fallback 확정! ${fd.toInt()}m")
+                        break
+                    }
                 }
             }
 
