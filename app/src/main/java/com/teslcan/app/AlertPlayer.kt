@@ -189,7 +189,8 @@ class AlertPlayer(private val context: Context) {
 
     private fun isZoneEnabled(zone: Int): Boolean {
         return when (zone) {
-            1000, 600 -> alertAt1000m
+            1000 -> alertAt1000m
+            600 -> alertAt1000m
             500 -> alertAt500m
             300 -> alertAt300m
             100 -> alertAt100m
@@ -362,7 +363,9 @@ class AlertPlayer(private val context: Context) {
                 info.distance <= 100 -> 100
                 info.distance <= 300 -> 300
                 info.distance <= 500 -> 500
-                else -> 600
+                info.distance <= 600 -> 600
+                info.d1 > 600 && info.distance <= 1000 -> 1000
+                else -> info.d1.coerceIn(100, 1100)
             }
         }
         handleAlert(

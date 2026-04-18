@@ -42,8 +42,13 @@ class CameraEngine(
         private const val TAG = "CameraEngine"
 
         private const val SCAN_RADIUS = 1500
-        private const val ALERT_DISTANCE = 600
-        private const val LOST_DISTANCE = 800
+        /** 80km/h 미만: 일반도로 — 최대 약 600m, 구간 알림 500m부터 */
+        private const val ALERT_DISTANCE_NORMAL = 600
+        /** 80km/h 이상: 고속 구간 — 최대 약 1.1km */
+        private const val ALERT_DISTANCE_HIGHWAY = 1100
+        private const val LOST_DISTANCE_NORMAL = 800
+        private const val LOST_DISTANCE_HIGHWAY = 1300
+        private const val HIGHWAY_SPEED_KMH = 80
         private const val COOLDOWN_MS = 60_000L
         private const val PASS_DISTANCE = 50.0
 
@@ -61,9 +66,18 @@ class CameraEngine(
         private const val MIN_MOVE_FOR_BEARING = 5.0
         private const val TRACKING_GRACE_MS = 8000L
 
-        /** 최대 알림 반경(ALERT_DISTANCE)과 맞춤. UI의 1km 스위치는 600m 구간에 매핑 */
-        private val ALERT_ZONES = intArrayOf(600, 500, 300, 100)
+        private val ALERT_ZONES_NORMAL = intArrayOf(500, 300, 100)
+        private val ALERT_ZONES_HIGHWAY = intArrayOf(1000, 600, 500, 300, 100)
         private const val BEARING_HISTORY_SIZE = 5
+
+        private fun alertDistanceM(speedKmh: Int): Double =
+            if (speedKmh >= HIGHWAY_SPEED_KMH) ALERT_DISTANCE_HIGHWAY.toDouble() else ALERT_DISTANCE_NORMAL.toDouble()
+
+        private fun lostDistanceM(speedKmh: Int): Double =
+            if (speedKmh >= HIGHWAY_SPEED_KMH) LOST_DISTANCE_HIGHWAY.toDouble() else LOST_DISTANCE_NORMAL.toDouble()
+
+        private fun alertZonesFor(speedKmh: Int): IntArray =
+            if (speedKmh >= HIGHWAY_SPEED_KMH) ALERT_ZONES_HIGHWAY else ALERT_ZONES_NORMAL
 
         /** 제한속도가 0이면 후보에서 제외하는 타입(CSV 누락 시). 신호·구간·어린이 등은 0이어도 유지 */
         private val SPEED_LIMIT_REQUIRED_IF_ZERO = setOf(
@@ -158,7 +172,12 @@ class CameraEngine(
         pendingApproachTicks = 0
     }
 
-    private fun applyTrackingStart(cam: CameraRecord, route: MapboxRouter.RouteResult, straightM: Double) {
+    private fun applyTrackingStart(
+        cam: CameraRecord,
+        route: MapboxRouter.RouteResult,
+        straightM: Double,
+        speedKmh: Int
+    ) {
         trackingCamera = cam
         cachedRoute = route
         minDistReached = route.roadDistance
@@ -175,7 +194,7 @@ class CameraEngine(
         // 가장 바깥 zone 한 개만 buildAlert 첫 틱에서 zoneTriggered로 재생되도록 제외(나머지는 스킵).
         val startDist = route.roadDistance.toInt()
         var outermostAlreadyInside = 0
-        for (zone in ALERT_ZONES) {
+        for (zone in alertZonesFor(speedKmh)) {
             if (startDist <= zone) {
                 zoneFired.add(zone)
                 if (outermostAlreadyInside == 0) outermostAlreadyInside = zone
@@ -223,7 +242,7 @@ class CameraEngine(
             return updateTracking(lat, lon, speedKmh, overThreshold, now)
         }
         if (pendingFallbackCam != null) {
-            if (tickPendingFallback(lat, lon, now)) {
+            if (tickPendingFallback(lat, lon, now, speedKmh)) {
                 return updateTracking(lat, lon, speedKmh, overThreshold, now)
             }
             if (pendingFallbackCam != null) return null
@@ -235,7 +254,12 @@ class CameraEngine(
     /**
      * @return true 이면 이번 틱에 추적이 시작됐으므로 호출측에서 updateTracking을 이어서 호출.
      */
-    private fun tickPendingFallback(lat: Double, lon: Double, @Suppress("UNUSED_PARAMETER") now: Long): Boolean {
+    private fun tickPendingFallback(
+        lat: Double,
+        lon: Double,
+        @Suppress("UNUSED_PARAMETER") now: Long,
+        speedKmh: Int
+    ): Boolean {
         val cam = pendingFallbackCam ?: return false
         if (!bearingValid) {
             Log.d(TAG, "fallback pending 취소: bearing 미확인")
@@ -270,7 +294,7 @@ class CameraEngine(
                     success = false
                 )
                 clearPendingFallback()
-                applyTrackingStart(cam, route, d)
+                applyTrackingStart(cam, route, d, speedKmh)
                 return true
             }
         }
@@ -321,7 +345,7 @@ class CameraEngine(
             if (isInCooldown(cam)) continue
 
             val dist = distanceBetween(lat, lon, cam.lat, cam.lon)
-            if (dist > ALERT_DISTANCE) continue
+            if (dist > alertDistanceM(speedKmh)) continue
 
             val bearingToCam = bearingBetween(lat, lon, cam.lat, cam.lon)
             val camHeading = cam.direction?.toInt() ?: -1
@@ -443,7 +467,7 @@ class CameraEngine(
                         Log.d(TAG, "  → 비율 초과 스킵")
                         continue
                     }
-                    if (route.roadDistance > ALERT_DISTANCE * 1.5) {
+                    if (route.roadDistance > alertDistanceM(curSpeed) * 1.5) {
                         Log.d(TAG, "  → 도로거리 ${route.roadDistance.toInt()}m 스킵")
                         continue
                     }
@@ -469,6 +493,16 @@ class CameraEngine(
                             )
                             continue
                         }
+                    }
+                    val camHid = candidate.cam.direction?.toInt() ?: -1
+                    if (camHid < 0 && curBearingValid &&
+                        RouteService.isOppositeLaneCamera(
+                            curLat, curLon, curBearing,
+                            candidate.cam.lat, candidate.cam.lon, 30
+                        )
+                    ) {
+                        Log.d(TAG, "  → 반대차선 판정(nearest) 스킵: ${candidate.cam.safetyCode.label}")
+                        continue
                     }
                     bestCam = candidate.cam
                     bestRoute = route
@@ -522,7 +556,7 @@ class CameraEngine(
                 val pickedCam = bestCam
                 val pickedRoute = bestRoute
                 if (pickedCam != null && pickedRoute != null) {
-                    applyTrackingStart(pickedCam, pickedRoute, bestStraight)
+                    applyTrackingStart(pickedCam, pickedRoute, bestStraight, curSpeed)
                 } else if (pendingUnknownHeading != null) {
                     val c = pendingUnknownHeading!!
                     pendingFallbackCam = c.cam
@@ -630,7 +664,7 @@ class CameraEngine(
                 return idle()
             }
         }
-        if (straightDist > LOST_DISTANCE) {
+        if (straightDist > lostDistanceM(speedKmh)) {
             Log.d(TAG, "[CAM] 해제(거리초과)")
             resetTracking()
             return idle()
@@ -687,16 +721,17 @@ class CameraEngine(
     ): AlertInfo {
         val roadDistInt = roadDist.toInt()
         val roundedDist = ((roadDistInt + 50) / 100) * 100
+        val maxAlert = alertDistanceM(speedKmh).toInt()
         val phase = when {
             roadDistInt <= 100 -> 4
             roadDistInt <= 300 -> 3
             roadDistInt <= 500 -> 2
-            roadDistInt <= ALERT_DISTANCE -> 1
+            roadDistInt <= maxAlert -> 1
             else -> 0
         }
         val onViolation = cam.speedLimit > 0 && speedKmh > cam.speedLimit + overThreshold
         var zoneTriggered = 0
-        for (zone in ALERT_ZONES) {
+        for (zone in alertZonesFor(speedKmh)) {
             if (roadDistInt <= zone && zone !in zoneFired) {
                 zoneFired.add(zone)
                 zoneTriggered = zone
@@ -721,7 +756,7 @@ class CameraEngine(
             sectionAvgSpeed = sectionAvg,
             zoneTriggered = zoneTriggered,
             rawDistance = rawDist.coerceAtLeast(0),
-            d1 = ALERT_DISTANCE
+            d1 = maxAlert
         )
     }
 

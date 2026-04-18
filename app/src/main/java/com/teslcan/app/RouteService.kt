@@ -59,22 +59,13 @@ object RouteService {
         return executeRequest(url, straightDist)
     }
 
-    /**
-     * OSRM Nearest: 카메라 좌표를 차량 진행 방향에 맞는 도로 세그먼트에 스냅할 수 있는지.
-     * [bearings]=`방위,허용각` — heading 미상 카메라의 반대차선·측면 오탐 완화용. Mapbox 전용 빌드에서는 true.
-     * 네트워크/파싱 실패 시 true(후보 유지).
-     */
-    fun nearestSnapAcceptsBearing(
-        camLat: Double,
-        camLon: Double,
-        vehicleBearingDeg: Double,
-        bearingSpreadDeg: Int = 45
-    ): Boolean {
-        if (BuildConfig.USE_MAPBOX) return true
-        val nearestBase = buildOsrmNearestServiceBase() ?: return true
-        val br = ((vehicleBearingDeg % 360.0) + 360.0) % 360.0
+    /** OSRM nearest JSON 본문. Mapbox·URL 불가 시 null. HTTP 오류·예외 시 null. */
+    private fun nearestHttpJson(lat: Double, lon: Double, bearingDeg: Double, spreadDeg: Int): JSONObject? {
+        if (BuildConfig.USE_MAPBOX) return null
+        val nearestBase = buildOsrmNearestServiceBase() ?: return null
+        val br = ((bearingDeg % 360.0) + 360.0) % 360.0
         val brInt = ((br.roundToInt() % 360) + 360) % 360
-        val url = "$nearestBase/$camLon,$camLat?number=1&bearings=$brInt,$bearingSpreadDeg"
+        val url = "$nearestBase/$lon,$lat?number=1&bearings=$brInt,$spreadDeg"
         return try {
             val conn = URL(url).openConnection() as HttpURLConnection
             conn.connectTimeout = TIMEOUT
@@ -85,22 +76,76 @@ object RouteService {
             if (http != 200) {
                 Log.w(TAG, "nearest HTTP $http URL=${urlForLog(url)}")
                 conn.disconnect()
-                return true
+                return null
             }
             val body = conn.inputStream.bufferedReader().readText()
             conn.disconnect()
-            val obj = JSONObject(body)
-            val resultCode = obj.optString("code", "")
-            if (resultCode != "Ok") {
-                Log.d(TAG, "nearest code=$resultCode (${urlForLog(url)})")
-                return false
-            }
-            val wps = obj.optJSONArray("waypoints")
-            wps != null && wps.length() > 0
+            JSONObject(body)
         } catch (e: Exception) {
             Log.w(TAG, "nearest 실패: ${e.javaClass.simpleName}: ${e.message} URL=${urlForLog(url)}")
-            true
+            null
         }
+    }
+
+    /** 첫 waypoint의 스냅 좌표. code!=Ok 또는 waypoint 없음이면 null. */
+    fun nearestSnapLocation(
+        lat: Double,
+        lon: Double,
+        bearingDeg: Double,
+        spreadDeg: Int = 30
+    ): LatLon? {
+        val obj = nearestHttpJson(lat, lon, bearingDeg, spreadDeg) ?: return null
+        if (obj.optString("code", "") != "Ok") return null
+        val wps = obj.optJSONArray("waypoints") ?: return null
+        if (wps.length() == 0) return null
+        val loc = wps.getJSONObject(0).optJSONArray("location") ?: return null
+        if (loc.length() < 2) return null
+        return LatLon(lat = loc.getDouble(1), lon = loc.getDouble(0))
+    }
+
+    /**
+     * 진행 방향 스냅과 반대 방향 스냅 중, 카메라가 반대 차선 쪽 스냅에 더 가깝다고 판단되면 true.
+     * Mapbox·nearest 불가 시 false(필터 생략).
+     */
+    fun isOppositeLaneCamera(
+        myLat: Double,
+        myLon: Double,
+        myBearingDeg: Double,
+        camLat: Double,
+        camLon: Double,
+        spreadDeg: Int = 30
+    ): Boolean {
+        if (BuildConfig.USE_MAPBOX) return false
+        if (buildOsrmNearestServiceBase() == null) return false
+        val mySnap = nearestSnapLocation(myLat, myLon, myBearingDeg, spreadDeg) ?: return false
+        if (fastDist(myLat, myLon, mySnap.lat, mySnap.lon) > 80.0) return false
+        val camSame = nearestSnapLocation(camLat, camLon, myBearingDeg, spreadDeg) ?: return false
+        val opp = (myBearingDeg + 180.0) % 360.0
+        val camOpp = nearestSnapLocation(camLat, camLon, opp, spreadDeg) ?: return false
+        val distSame = fastDist(camLat, camLon, camSame.lat, camSame.lon)
+        val distOpp = fastDist(camLat, camLon, camOpp.lat, camOpp.lon)
+        return distOpp + 1.0 < distSame
+    }
+
+    /**
+     * OSRM Nearest: 카메라 좌표를 차량 진행 방향에 맞는 도로 세그먼트에 스냅할 수 있는지.
+     * 네트워크/파싱 실패 시 true(후보 유지).
+     */
+    fun nearestSnapAcceptsBearing(
+        camLat: Double,
+        camLon: Double,
+        vehicleBearingDeg: Double,
+        bearingSpreadDeg: Int = 45
+    ): Boolean {
+        if (BuildConfig.USE_MAPBOX) return true
+        val obj = nearestHttpJson(camLat, camLon, vehicleBearingDeg, bearingSpreadDeg) ?: return true
+        val resultCode = obj.optString("code", "")
+        if (resultCode != "Ok") {
+            Log.d(TAG, "nearest code=$resultCode")
+            return false
+        }
+        val wps = obj.optJSONArray("waypoints")
+        return wps != null && wps.length() > 0
     }
 
     /** `.../route/v1/driving` → `.../nearest/v1/driving` */
