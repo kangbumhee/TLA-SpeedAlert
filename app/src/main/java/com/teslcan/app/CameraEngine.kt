@@ -42,6 +42,8 @@ class CameraEngine(
         private const val TAG = "CameraEngine"
 
         private const val SCAN_RADIUS = 1500
+        /** 일반도로: DB 검색 반경 축소(불필요한 원거리 후보 감소) */
+        private const val SCAN_RADIUS_NORMAL = 600
         /** 80km/h 미만: 일반도로 — 최대 500m까지 감지 */
         private const val ALERT_DISTANCE_NORMAL = 500
         /** 80km/h 이상: 고속 구간 — 최대 약 1.1km */
@@ -178,6 +180,16 @@ class CameraEngine(
         straightM: Double,
         speedKmh: Int
     ) {
+        val maxDist = alertDistanceM(speedKmh)
+        if (route.roadDistance > maxDist * 1.2) {
+            Log.d(
+                TAG,
+                "추적거부: 도로${route.roadDistance.toInt()}m > 한도${(maxDist * 1.2).toInt()}m " +
+                    "(speed=${speedKmh}km/h, maxAlert=${maxDist.toInt()}m)"
+            )
+            return
+        }
+
         trackingCamera = cam
         cachedRoute = route
         minDistReached = route.roadDistance
@@ -328,10 +340,12 @@ class CameraEngine(
     private data class Candidate(val cam: CameraRecord, val dist: Double, val angleDiff: Double)
 
     private fun findAheadCamera(lat: Double, lon: Double, speedKmh: Int, overThreshold: Int): AlertInfo? {
+        val scanRadiusM =
+            if (speedKmh >= HIGHWAY_SPEED_KMH) SCAN_RADIUS.toDouble() else SCAN_RADIUS_NORMAL.toDouble()
         val allCameras = cameraDb.findNearbyCameras(
             lat, lon,
             headingDeg = null,
-            maxDistanceMeters = SCAN_RADIUS.toDouble(),
+            maxDistanceMeters = scanRadiusM,
             aheadAngle = 360f
         )
         if (allCameras.isEmpty()) return null
@@ -467,8 +481,16 @@ class CameraEngine(
                         Log.d(TAG, "  → 비율 초과 스킵")
                         continue
                     }
-                    if (route.roadDistance > alertDistanceM(curSpeed) * 1.5) {
-                        Log.d(TAG, "  → 도로거리 ${route.roadDistance.toInt()}m 스킵")
+                    val roadDistHardCapM = if (curSpeed >= HIGHWAY_SPEED_KMH) {
+                        ALERT_DISTANCE_HIGHWAY * 1.5
+                    } else {
+                        ALERT_DISTANCE_NORMAL.toDouble()
+                    }
+                    if (route.roadDistance > roadDistHardCapM) {
+                        Log.d(
+                            TAG,
+                            "  → 도로거리 ${route.roadDistance.toInt()}m > 상한${roadDistHardCapM.toInt()}m 스킵"
+                        )
                         continue
                     }
                     if (curBearingValid && route.routePoints.isNotEmpty()) {
