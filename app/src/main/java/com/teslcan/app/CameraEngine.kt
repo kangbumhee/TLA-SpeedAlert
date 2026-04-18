@@ -24,7 +24,7 @@ data class AlertInfo(
     /** 레거지 CamAlert: 1000/500/300/100 구간 중 이번 틱에 새로 진입한 구간(음성 1회). 0이면 없음 */
     val zoneTriggered: Int = 0,
     val rawDistance: Int = distance,
-    val d1: Int = 600,
+    val d1: Int = 500,
     val d2: Int = 100
 ) {
     val camType: Int get() = safetyCode.toLegacyCamType()
@@ -42,11 +42,11 @@ class CameraEngine(
         private const val TAG = "CameraEngine"
 
         private const val SCAN_RADIUS = 1500
-        /** 80km/h 미만: 일반도로 — 최대 약 600m, 구간 알림 500m부터 */
-        private const val ALERT_DISTANCE_NORMAL = 600
+        /** 80km/h 미만: 일반도로 — 최대 500m까지 감지 */
+        private const val ALERT_DISTANCE_NORMAL = 500
         /** 80km/h 이상: 고속 구간 — 최대 약 1.1km */
         private const val ALERT_DISTANCE_HIGHWAY = 1100
-        private const val LOST_DISTANCE_NORMAL = 800
+        private const val LOST_DISTANCE_NORMAL = 700
         private const val LOST_DISTANCE_HIGHWAY = 1300
         private const val HIGHWAY_SPEED_KMH = 80
         private const val COOLDOWN_MS = 60_000L
