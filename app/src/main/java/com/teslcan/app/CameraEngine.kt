@@ -170,10 +170,26 @@ class CameraEngine(
         sectionEntry = null
         sectionEntryTime = 0L
         sectionDistance = 0.0
+
+        // 추적 시작 시점에 이미 안쪽 zone에 들어와 있으면, 지나온 바깥 zone은 소진 처리.
+        // 가장 바깥 zone 한 개만 buildAlert 첫 틱에서 zoneTriggered로 재생되도록 제외(나머지는 스킵).
+        val startDist = route.roadDistance.toInt()
+        var outermostAlreadyInside = 0
+        for (zone in ALERT_ZONES) {
+            if (startDist <= zone) {
+                zoneFired.add(zone)
+                if (outermostAlreadyInside == 0) outermostAlreadyInside = zone
+            }
+        }
+        if (outermostAlreadyInside > 0) {
+            zoneFired.remove(outermostAlreadyInside)
+        }
+
         Log.d(
             TAG,
             "추적시작: ${straightM.toInt()}m→${route.roadDistance.toInt()}m " +
-                "${cam.safetyCode.label} limit=${cam.speedLimit} heading=${cam.direction?.toInt() ?: -1}°"
+                "${cam.safetyCode.label} limit=${cam.speedLimit} heading=${cam.direction?.toInt() ?: -1}° " +
+                "zonePre=${zoneFired.joinToString()} replayOuter=$outermostAlreadyInside"
         )
     }
 
