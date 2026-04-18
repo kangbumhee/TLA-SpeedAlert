@@ -42,11 +42,9 @@ class CameraEngine(
         private const val TAG = "CameraEngine"
 
         private const val SCAN_RADIUS = 1500
-        /** 일반도로: DB 검색 반경 축소(불필요한 원거리 후보 감소) */
-        private const val SCAN_RADIUS_NORMAL = 600
-        /** 80km/h 미만: 일반도로 — 최대 500m까지 감지 */
+        /** 일반도로(카메라 제한 <80): 최대 500m까지 감지 */
         private const val ALERT_DISTANCE_NORMAL = 500
-        /** 80km/h 이상: 고속 구간 — 최대 약 1.1km */
+        /** 고속도로 급(카메라 제한 ≥80): 최대 약 1.1km */
         private const val ALERT_DISTANCE_HIGHWAY = 1100
         private const val LOST_DISTANCE_NORMAL = 700
         private const val LOST_DISTANCE_HIGHWAY = 1300
@@ -72,14 +70,21 @@ class CameraEngine(
         private val ALERT_ZONES_HIGHWAY = intArrayOf(1000, 600, 500, 300, 100)
         private const val BEARING_HISTORY_SIZE = 5
 
-        private fun alertDistanceM(speedKmh: Int): Double =
-            if (speedKmh >= HIGHWAY_SPEED_KMH) ALERT_DISTANCE_HIGHWAY.toDouble() else ALERT_DISTANCE_NORMAL.toDouble()
+        /**
+         * 고속도로 판별: 카메라 제한속도 기준(차량 속도 아님).
+         * limit ≥ 80 → 1100m / 고속 zone, 그 외(0 포함) → 500m / 일반 zone.
+         */
+        private fun isHighwayCamera(camSpeedLimit: Int): Boolean =
+            camSpeedLimit >= HIGHWAY_SPEED_KMH
 
-        private fun lostDistanceM(speedKmh: Int): Double =
-            if (speedKmh >= HIGHWAY_SPEED_KMH) LOST_DISTANCE_HIGHWAY.toDouble() else LOST_DISTANCE_NORMAL.toDouble()
+        private fun alertDistanceForCam(camSpeedLimit: Int): Double =
+            if (isHighwayCamera(camSpeedLimit)) ALERT_DISTANCE_HIGHWAY.toDouble() else ALERT_DISTANCE_NORMAL.toDouble()
 
-        private fun alertZonesFor(speedKmh: Int): IntArray =
-            if (speedKmh >= HIGHWAY_SPEED_KMH) ALERT_ZONES_HIGHWAY else ALERT_ZONES_NORMAL
+        private fun lostDistanceForCam(camSpeedLimit: Int): Double =
+            if (isHighwayCamera(camSpeedLimit)) LOST_DISTANCE_HIGHWAY.toDouble() else LOST_DISTANCE_NORMAL.toDouble()
+
+        private fun alertZonesForCam(camSpeedLimit: Int): IntArray =
+            if (isHighwayCamera(camSpeedLimit)) ALERT_ZONES_HIGHWAY else ALERT_ZONES_NORMAL
 
         /** 제한속도가 0이면 후보에서 제외하는 타입(CSV 누락 시). 신호·구간·어린이 등은 0이어도 유지 */
         private val SPEED_LIMIT_REQUIRED_IF_ZERO = setOf(
@@ -178,14 +183,14 @@ class CameraEngine(
         cam: CameraRecord,
         route: MapboxRouter.RouteResult,
         straightM: Double,
-        speedKmh: Int
+        @Suppress("UNUSED_PARAMETER") speedKmh: Int
     ) {
-        val maxDist = alertDistanceM(speedKmh)
+        val maxDist = alertDistanceForCam(cam.speedLimit)
         if (route.roadDistance > maxDist * 1.2) {
             Log.d(
                 TAG,
                 "추적거부: 도로${route.roadDistance.toInt()}m > 한도${(maxDist * 1.2).toInt()}m " +
-                    "(speed=${speedKmh}km/h, maxAlert=${maxDist.toInt()}m)"
+                    "(camLimit=${cam.speedLimit}, maxAlert=${maxDist.toInt()}m)"
             )
             return
         }
@@ -206,7 +211,7 @@ class CameraEngine(
         // 가장 바깥 zone 한 개만 buildAlert 첫 틱에서 zoneTriggered로 재생되도록 제외(나머지는 스킵).
         val startDist = route.roadDistance.toInt()
         var outermostAlreadyInside = 0
-        for (zone in alertZonesFor(speedKmh)) {
+        for (zone in alertZonesForCam(cam.speedLimit)) {
             if (startDist <= zone) {
                 zoneFired.add(zone)
                 if (outermostAlreadyInside == 0) outermostAlreadyInside = zone
@@ -340,12 +345,11 @@ class CameraEngine(
     private data class Candidate(val cam: CameraRecord, val dist: Double, val angleDiff: Double)
 
     private fun findAheadCamera(lat: Double, lon: Double, speedKmh: Int, overThreshold: Int): AlertInfo? {
-        val scanRadiusM =
-            if (speedKmh >= HIGHWAY_SPEED_KMH) SCAN_RADIUS.toDouble() else SCAN_RADIUS_NORMAL.toDouble()
+        // DB 반경: 고속 제한(≥80) 카메라는 최대 ~1100m까지 필요하므로 고정 1500m 유지
         val allCameras = cameraDb.findNearbyCameras(
             lat, lon,
             headingDeg = null,
-            maxDistanceMeters = scanRadiusM,
+            maxDistanceMeters = SCAN_RADIUS.toDouble(),
             aheadAngle = 360f
         )
         if (allCameras.isEmpty()) return null
@@ -359,7 +363,7 @@ class CameraEngine(
             if (isInCooldown(cam)) continue
 
             val dist = distanceBetween(lat, lon, cam.lat, cam.lon)
-            if (dist > alertDistanceM(speedKmh)) continue
+            if (dist > alertDistanceForCam(cam.speedLimit)) continue
 
             val bearingToCam = bearingBetween(lat, lon, cam.lat, cam.lon)
             val camHeading = cam.direction?.toInt() ?: -1
@@ -481,15 +485,11 @@ class CameraEngine(
                         Log.d(TAG, "  → 비율 초과 스킵")
                         continue
                     }
-                    val roadDistHardCapM = if (curSpeed >= HIGHWAY_SPEED_KMH) {
-                        ALERT_DISTANCE_HIGHWAY * 1.5
-                    } else {
-                        ALERT_DISTANCE_NORMAL.toDouble()
-                    }
-                    if (route.roadDistance > roadDistHardCapM) {
+                    val hardCapM = alertDistanceForCam(candidate.cam.speedLimit)
+                    if (route.roadDistance > hardCapM) {
                         Log.d(
                             TAG,
-                            "  → 도로거리 ${route.roadDistance.toInt()}m > 상한${roadDistHardCapM.toInt()}m 스킵"
+                            "  → 도로거리 ${route.roadDistance.toInt()}m > 상한${hardCapM.toInt()}m 스킵"
                         )
                         continue
                     }
@@ -686,7 +686,7 @@ class CameraEngine(
                 return idle()
             }
         }
-        if (straightDist > lostDistanceM(speedKmh)) {
+        if (straightDist > lostDistanceForCam(cam.speedLimit)) {
             Log.d(TAG, "[CAM] 해제(거리초과)")
             resetTracking()
             return idle()
@@ -743,7 +743,7 @@ class CameraEngine(
     ): AlertInfo {
         val roadDistInt = roadDist.toInt()
         val roundedDist = ((roadDistInt + 50) / 100) * 100
-        val maxAlert = alertDistanceM(speedKmh).toInt()
+        val maxAlert = alertDistanceForCam(cam.speedLimit).toInt()
         val phase = when {
             roadDistInt <= 100 -> 4
             roadDistInt <= 300 -> 3
@@ -753,7 +753,7 @@ class CameraEngine(
         }
         val onViolation = cam.speedLimit > 0 && speedKmh > cam.speedLimit + overThreshold
         var zoneTriggered = 0
-        for (zone in alertZonesFor(speedKmh)) {
+        for (zone in alertZonesForCam(cam.speedLimit)) {
             if (roadDistInt <= zone && zone !in zoneFired) {
                 zoneFired.add(zone)
                 zoneTriggered = zone
