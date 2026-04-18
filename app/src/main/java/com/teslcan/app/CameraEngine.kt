@@ -48,6 +48,8 @@ class CameraEngine(
         private const val PASS_DISTANCE = 50.0
 
         private const val AHEAD_ANGLE = 40.0
+        /** 차량→카메라 방위가 진행 방향과 이 각도(°) 이내면 전방으로 간주(heading 미상 CSV 대비 완화) */
+        private const val FORWARD_TO_CAM_DEG = 60.0
         private const val BEHIND_ANGLE = 110.0
         private const val MIN_SPEED_FOR_BEARING = 5
         private const val MIN_MOVE_FOR_BEARING = 5.0
@@ -215,56 +217,62 @@ class CameraEngine(
             val dist = distanceBetween(lat, lon, cam.lat, cam.lon)
             if (dist > ALERT_DISTANCE) continue
 
-            val angleDiffVal: Double = if (bearingValid) {
-                val bearingToCam = bearingBetween(lat, lon, cam.lat, cam.lon)
-                val diff = angleDiff(currentBearing, bearingToCam)
-                if (diff > AHEAD_ANGLE) continue
+            val bearingToCam = bearingBetween(lat, lon, cam.lat, cam.lon)
+            val camHeading = cam.direction?.toInt() ?: -1
 
-                val headingInt = cam.direction?.toInt() ?: -1
-                if (headingInt >= 0) {
-                    val headingDiff = angleDiff(currentBearing, headingInt.toDouble())
-                    if (headingDiff > 60.0) {
+            if (bearingValid) {
+                val diffToCam = angleDiff(currentBearing, bearingToCam)
+                if (diffToCam > FORWARD_TO_CAM_DEG) continue
+
+                if (camHeading >= 0) {
+                    val headingDiff = angleDiff(currentBearing, camHeading.toDouble())
+                    if (headingDiff > 90.0) {
                         Log.d(
                             TAG,
-                            "heading 필터: ${cam.safetyCode.label} limit=${cam.speedLimit} Δ=${"%.0f".format(headingDiff)}° → 스킵"
+                            "  방향필터: ${cam.safetyCode.label} heading=${camHeading}° " +
+                                "내bearing=${"%.0f".format(Locale.US, currentBearing)}° " +
+                                "Δ=${"%.0f".format(Locale.US, headingDiff)}° → 반대방향 스킵"
                         )
                         continue
                     }
+                } else {
+                    if (dist > 200.0 && diffToCam > AHEAD_ANGLE) continue
                 }
-                if (headingInt < 0 && dist > 200.0) continue
-                diff
             } else {
-                val headingInt = cam.direction?.toInt() ?: -1
-                if (headingInt < 0 && dist > 200.0) continue
-                0.0
+                if (camHeading < 0 && dist > 200.0) continue
             }
 
+            val angleDiffVal = if (bearingValid) angleDiff(currentBearing, bearingToCam) else 0.0
             candidates.add(Candidate(cam, dist, angleDiffVal))
         }
 
         if (bearingValid) {
             Log.d(TAG, "검색: bearing=${"%.0f".format(Locale.US, currentBearing)}° raw=${allCameras.size}→후보 ${candidates.size}개")
         } else {
-            Log.d(TAG, "검색: bearing=invalid →전방위 후보 ${candidates.size}개 (raw=${allCameras.size})")
+            Log.d(TAG, "검색: bearing=미확인 raw=${allCameras.size}→후보 ${candidates.size}개")
         }
 
         if (candidates.isEmpty() && allCameras.isNotEmpty()) {
             val sample = allCameras.first()
             val d0 = distanceBetween(lat, lon, sample.lat, sample.lon)
+            val bearToSample = bearingBetween(lat, lon, sample.lat, sample.lon)
+            val sampleHead = sample.direction?.toInt() ?: -1
             Log.d(
                 TAG,
-                "  예시 탈락: ${sample.safetyCode.label} limit=${sample.speedLimit} dist=${"%.0f".format(d0)}m " +
+                "  예시 탈락: ${sample.safetyCode.label} limit=${sample.speedLimit} " +
+                    "dist=${"%.0f".format(Locale.US, d0)}m heading=${sampleHead}° " +
+                    "내bearing=${"%.0f".format(Locale.US, currentBearing)}° " +
+                    "카메라방위=${"%.0f".format(Locale.US, bearToSample)}° " +
                     "alert=${isAlertTarget(sample.safetyCode, sample.speedLimit)} " +
-                    "typeOn=${DrivingProfile.isTypeEnabled(sample.safetyCode.toLegacyCamType(), settings)} " +
-                    "cool=${isInCooldown(sample)} bearing=$bearingValid"
+                    "typeOn=${DrivingProfile.isTypeEnabled(sample.safetyCode.toLegacyCamType(), settings)}"
             )
         }
 
         if (candidates.isEmpty()) return null
 
         val sorted = candidates.sortedWith(
-            compareBy<Candidate> { camTypePriority(it.cam.safetyCode.toLegacyCamType()) }
-                .thenBy { it.dist }
+            compareBy<Candidate> { it.dist }
+                .thenBy { camTypePriority(it.cam.safetyCode.toLegacyCamType()) }
                 .thenBy { it.angleDiff }
         )
         val topCandidates = sorted.take(3)
@@ -318,7 +326,7 @@ class CameraEngine(
                     break
                 } else {
                     val fd = candidate.dist * 1.3
-                    Log.w(TAG, "  API 실패 → 직선 fallback ${candidate.dist.toInt()}m (도로환산 ${fd.toInt()}m)")
+                    Log.d(TAG, "  API 실패 → 직선 fallback ${candidate.dist.toInt()}m (도로산 ${fd.toInt()}m)")
                     if (candidate.dist <= ALERT_DISTANCE) {
                         bestCam = candidate.cam
                         bestRoute = MapboxRouter.RouteResult(
@@ -328,7 +336,7 @@ class CameraEngine(
                             success = false
                         )
                         bestStraight = candidate.dist
-                        Log.d(TAG, "  ✓ fallback 확정! ${fd.toInt()}m")
+                        Log.d(TAG, "  → fallback 확정! ${fd.toInt()}m")
                         break
                     }
                 }
@@ -348,7 +356,12 @@ class CameraEngine(
                     sectionEntry = null
                     sectionEntryTime = 0L
                     sectionDistance = 0.0
-                    Log.d(TAG, "추적시작: ${bestStraight.toInt()}m→${bestRoute.roadDistance.toInt()}m ${bestCam.safetyCode.label}")
+                    Log.d(
+                        TAG,
+                        "추적시작: ${bestStraight.toInt()}m→${bestRoute.roadDistance.toInt()}m " +
+                            "${bestCam.safetyCode.label} limit=${bestCam.speedLimit} " +
+                            "heading=${bestCam.direction?.toInt() ?: -1}°"
+                    )
                 } else {
                     Log.d(TAG, "적합 카메라 없음 (${topCandidates.size}개 검토)")
                 }
