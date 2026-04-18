@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string-array name="sim_speeds">
+        <item>40 km/h</item>
+        <item>60 km/h</item>
+        <item>80 km/h</item>
+        <item>100 km/h</item>
+    </string-array>
+</resources>

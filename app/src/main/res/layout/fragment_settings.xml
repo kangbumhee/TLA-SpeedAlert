@@ -1,0 +1,462 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#0D1117"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="주행 프로필"
+            android:textColor="#8B949E"
+            android:textSize="13sp" />
+
+        <RadioGroup
+            android:id="@+id/rgProfile"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:background="#161B22"
+            android:padding="10dp"
+            android:layout_marginBottom="12dp">
+
+            <RadioButton
+                android:id="@+id/rbBeginner"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="초보"
+                android:textColor="#C9D1D9" />
+
+            <RadioButton
+                android:id="@+id/rbStandard"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="표준"
+                android:textColor="#C9D1D9" />
+
+            <RadioButton
+                android:id="@+id/rbVeteran"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="베테랑"
+                android:textColor="#C9D1D9" />
+
+            <RadioButton
+                android:id="@+id/rbNight"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="야간"
+                android:textColor="#C9D1D9" />
+        </RadioGroup>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="카메라 종류"
+            android:textColor="#8B949E"
+            android:textSize="13sp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="#161B22"
+            android:padding="10dp"
+            android:layout_marginBottom="12dp">
+
+            <com.google.android.material.switchmaterial.SwitchMaterial
+                android:id="@+id/swFixed"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="고정식 과속"
+                android:textColor="#C9D1D9" />
+
+            <com.google.android.material.switchmaterial.SwitchMaterial
+                android:id="@+id/swMobile"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="이동식 예상"
+                android:textColor="#C9D1D9" />
+
+            <com.google.android.material.switchmaterial.SwitchMaterial
+                android:id="@+id/swSection"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="구간단속"
+                android:textColor="#C9D1D9" />
+
+            <com.google.android.material.switchmaterial.SwitchMaterial
+                android:id="@+id/swRedLight"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="신호위반 단속"
+                android:textColor="#C9D1D9" />
+
+            <com.google.android.material.switchmaterial.SwitchMaterial
+                android:id="@+id/swChildZone"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="어린이보호구역"
+                android:textColor="#C9D1D9" />
+
+            <com.google.android.material.switchmaterial.SwitchMaterial
+                android:id="@+id/swBusLane"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="버스전용차로"
+                android:textColor="#C9D1D9" />
+        </LinearLayout>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="과속 경고 기준"
+            android:textColor="#8B949E"
+            android:textSize="13sp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:background="#161B22"
+            android:padding="10dp"
+            android:layout_marginBottom="12dp">
+
+            <SeekBar
+                android:id="@+id/seekOverSpeed"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:max="30"
+                android:progress="10" />
+
+            <TextView
+                android:id="@+id/tvOverSpeed"
+                android:layout_width="80dp"
+                android:layout_height="wrap_content"
+                android:gravity="end"
+                android:text="+10 km/h"
+                android:textColor="#F85149"
+                android:textSize="13sp" />
+        </LinearLayout>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="볼륨"
+            android:textColor="#8B949E"
+            android:textSize="13sp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:background="#161B22"
+            android:padding="10dp"
+            android:layout_marginBottom="12dp">
+
+            <SeekBar
+                android:id="@+id/seekVolume"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:max="100"
+                android:progress="80" />
+
+            <TextView
+                android:id="@+id/tvVolume"
+                android:layout_width="60dp"
+                android:layout_height="wrap_content"
+                android:gravity="end"
+                android:text="80%"
+                android:textColor="#39D353"
+                android:textSize="13sp" />
+        </LinearLayout>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="음성 스타일"
+            android:textColor="#8B949E"
+            android:textSize="13sp" />
+
+        <RadioGroup
+            android:id="@+id/rgStyle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:background="#161B22"
+            android:padding="10dp"
+            android:layout_marginBottom="12dp">
+
+            <RadioButton
+                android:id="@+id/rbShort"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="짧게"
+                android:textColor="#C9D1D9" />
+
+            <RadioButton
+                android:id="@+id/rbStandardStyle"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="표준"
+                android:textColor="#C9D1D9" />
+
+            <RadioButton
+                android:id="@+id/rbDetailed"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="상세"
+                android:textColor="#C9D1D9" />
+        </RadioGroup>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="알림 거리 설정"
+            android:textColor="#8B949E"
+            android:textSize="13sp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="#161B22"
+            android:padding="10dp"
+            android:layout_marginBottom="12dp">
+
+            <com.google.android.material.switchmaterial.SwitchMaterial
+                android:id="@+id/sw1000m"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="1km 전 알림"
+                android:textColor="#C9D1D9" />
+
+            <com.google.android.material.switchmaterial.SwitchMaterial
+                android:id="@+id/sw500m"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="500m 전 알림"
+                android:textColor="#C9D1D9" />
+
+            <com.google.android.material.switchmaterial.SwitchMaterial
+                android:id="@+id/sw300m"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="300m 전 알림"
+                android:textColor="#C9D1D9" />
+
+            <com.google.android.material.switchmaterial.SwitchMaterial
+                android:id="@+id/sw100m"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="100m 전 알림"
+                android:textColor="#C9D1D9" />
+        </LinearLayout>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="편의 기능"
+            android:textColor="#8B949E"
+            android:textSize="13sp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:background="#161B22"
+            android:padding="10dp"
+            android:layout_marginBottom="12dp">
+
+            <com.google.android.material.switchmaterial.SwitchMaterial
+                android:id="@+id/swNightAuto"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="야간 자동 볼륨 감소"
+                android:textColor="#C9D1D9" />
+
+            <com.google.android.material.switchmaterial.SwitchMaterial
+                android:id="@+id/swBeep"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="과속 비프음"
+                android:textColor="#C9D1D9" />
+
+            <com.google.android.material.switchmaterial.SwitchMaterial
+                android:id="@+id/swChime"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="통과 차임음"
+                android:textColor="#C9D1D9" />
+
+            <com.google.android.material.switchmaterial.SwitchMaterial
+                android:id="@+id/swKeepScreen"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="화면 항상 켜기"
+                android:textColor="#C9D1D9" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginTop="8dp">
+
+            <Button
+                android:id="@+id/btnTestVoice"
+                android:layout_width="0dp"
+                android:layout_height="48dp"
+                android:layout_weight="1"
+                android:layout_marginEnd="4dp"
+                android:text="음성 테스트"
+                android:backgroundTint="#1F6FEB" />
+
+            <Button
+                android:id="@+id/btnUpdate"
+                android:layout_width="0dp"
+                android:layout_height="48dp"
+                android:layout_weight="1"
+                android:layout_marginStart="4dp"
+                android:text="DB 업데이트"
+                android:backgroundTint="#238636" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/tvDbInfo"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:paddingTop="6dp"
+            android:text="DB 정보"
+            android:textColor="#8B949E"
+            android:textSize="12sp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:background="#1A1A2E"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="펌웨어 업데이트"
+                android:textColor="#FFFFFF"
+                android:textSize="16sp"
+                android:textStyle="bold" />
+
+            <Button
+                android:id="@+id/btnFirmwareUpdate"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:layout_marginTop="8dp"
+                android:backgroundTint="#2196F3"
+                android:text="업데이트 확인" />
+
+            <TextView
+                android:id="@+id/tvFirmwareStatus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="연결된 기기의 펌웨어를 확인합니다"
+                android:textColor="#AAAAAA"
+                android:textSize="13sp" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="24dp"
+                android:layout_marginBottom="8dp"
+                android:text="테스트 시뮬레이션"
+                android:textColor="#C9D1D9"
+                android:textSize="16sp"
+                android:textStyle="bold" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/btnSimGangnam"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="강남→잠실"
+                    android:textSize="11sp" />
+
+                <Button
+                    android:id="@+id/btnSimSeocho"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_marginStart="4dp"
+                    android:text="서초→양재"
+                    android:textSize="11sp" />
+
+                <Button
+                    android:id="@+id/btnSimCamera"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_marginStart="4dp"
+                    android:text="카메라밀집"
+                    android:textSize="11sp" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:orientation="horizontal">
+
+                <Spinner
+                    android:id="@+id/spinnerSimSpeed"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:entries="@array/sim_speeds" />
+
+                <Button
+                    android:id="@+id/btnSimStop"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_marginStart="4dp"
+                    android:enabled="false"
+                    android:text="시뮬 중지"
+                    android:textSize="11sp" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/tvSimStatus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text=""
+                android:textColor="#8B949E"
+                android:textSize="12sp" />
+        </LinearLayout>
+    </LinearLayout>
+</ScrollView>

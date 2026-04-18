@@ -1,0 +1,20 @@
+# Gradle / Android
+.gradle/
+build/
+**/build/
+local.properties
+*.iml
+.idea/
+.DS_Store
+captures/
+.externalNativeBuild/
+.cxx/
+
+# 키·시크릿
+*.jks
+*.keystore
+.env
+.env.*
+
+# 공공데이터 전국 CSV (용량 큼 — data.go.kr에서 복사하거나 앱 내 원격 업데이트 사용)
+app/src/main/assets/cameras.csv
