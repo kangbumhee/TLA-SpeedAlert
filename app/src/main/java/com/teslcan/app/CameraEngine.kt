@@ -61,7 +61,7 @@ class CameraEngine(
         /** OSRM 도착 접근 방향: 카메라 직전 50m 이상 구간으로 베어링 계산 */
         private const val APPROACH_LOOKBACK_M = 50.0
         /** 도착 접근 방향 vs 차량 bearing 최대 허용 편차(교차로 우회·수직 도로 단속 억제) */
-        private const val APPROACH_MAX_BEARING_DIFF_DEG = 60.0
+        private const val APPROACH_MAX_BEARING_DIFF_DEG = 45.0
         /** 경로 상 최대 회전각: 초과 시 교차로 회전 포함으로 보고 후보 제외 */
         private const val ROUTE_MAX_TURN_FOR_STRAIGHT_DEG = 50.0
         private const val MIN_ROUTE_SEGMENT_FOR_TURN_M = 10.0
@@ -75,6 +75,10 @@ class CameraEngine(
         private const val MIN_SPEED_FOR_BEARING = 5
         private const val MIN_MOVE_FOR_BEARING = 5.0
         private const val TRACKING_GRACE_MS = 8000L
+        /** 이보다 짧게 추적이 끊기면 반대차선·무관 카메라 의심 → 쿨다운 */
+        private const val TRACKING_SUSPICIOUS_QUICK_MS = 5000L
+        /** [PassedCamera] 동일·인접 PO 재감지 억제 반경 */
+        private const val COOLDOWN_CAPTURE_RADIUS_M = 100.0
 
         private val ALERT_ZONES_NORMAL = intArrayOf(500, 300, 100)
         private val ALERT_ZONES_HIGHWAY = intArrayOf(1000, 600, 500, 300, 100)
@@ -550,22 +554,6 @@ class CameraEngine(
                             continue
                         }
                     }
-                    val camHid = candidate.cam.direction?.toInt() ?: -1
-                    if (camHid < 0 && curBearingValid) {
-                        val isOpp = RouteService.isOppositeLaneCamera(
-                            curLat, curLon, curBearing,
-                            candidate.cam.lat, candidate.cam.lon, 30
-                        )
-                        Log.d(
-                            TAG,
-                            "  반대차선 검사: isOpp=$isOpp bearing=${"%.0f".format(Locale.US, curBearing)}° " +
-                                "${candidate.cam.safetyCode.label} dist=${candidate.dist.toInt()}m"
-                        )
-                        if (isOpp) {
-                            Log.d(TAG, "  → 반대차선 판정(nearest) 스킵: ${candidate.cam.safetyCode.label}")
-                            continue
-                        }
-                    }
                     bestCam = candidate.cam
                     bestRoute = route
                     bestStraight = candidate.dist
@@ -676,6 +664,8 @@ class CameraEngine(
         if (roadDist < minDistReached) minDistReached = roadDist
         lastDist = roadDist
         val inGrace = (now - trackingStartMs) < TRACKING_GRACE_MS
+        val trackingDuration = now - trackingStartMs
+        val suspiciousQuickRelease = trackingDuration < TRACKING_SUSPICIOUS_QUICK_MS
 
         if (!inGrace && minDistReached < PASS_DISTANCE && recedeCount >= 2 && roadDist > minDistReached + 10.0) {
             Log.d(TAG, "[CAM] 빠른통과")
@@ -690,8 +680,17 @@ class CameraEngine(
             val bearingToCam = bearingBetween(lat, lon, cam.lat, cam.lon)
             val diff = angleDiff(currentBearing, bearingToCam)
             if (diff > BEHIND_ANGLE && straightDist > 30.0) {
-                Log.d(TAG, "[CAM] 통과(heading)")
-                return onCameraPassed(cam, now, speedKmh, overThreshold)
+                Log.d(
+                    TAG,
+                    "[CAM] 통과(heading) duration=${trackingDuration}ms " +
+                        "minDist=${minDistReached.toInt()}m"
+                )
+                val sidePassSuspect = minDistReached > PASS_DISTANCE
+                if (sidePassSuspect) {
+                    passedCameras.add(PassedCamera(cam.lat, cam.lon, now))
+                    Log.d(TAG, "  → 옆지나감 쿨다운 등록(반대차선 의심)")
+                }
+                return onCameraPassed(cam, now, speedKmh, overThreshold, skipPassedRecord = sidePassSuspect)
             }
         }
 
@@ -721,13 +720,21 @@ class CameraEngine(
             val bearingToCam = bearingBetween(lat, lon, cam.lat, cam.lon)
             val diff = angleDiff(currentBearing, bearingToCam)
             if (diff > 90.0) {
-                Log.d(TAG, "[CAM] 해제(뒤)")
+                Log.d(TAG, "[CAM] 해제(뒤) duration=${trackingDuration}ms")
+                if (suspiciousQuickRelease) {
+                    passedCameras.add(PassedCamera(cam.lat, cam.lon, now))
+                    Log.d(TAG, "  → 빠른해제 쿨다운 등록(반대차선 의심)")
+                }
                 resetTracking()
                 return idle()
             }
         }
         if (straightDist > lostDistanceForCam(cam.speedLimit)) {
-            Log.d(TAG, "[CAM] 해제(거리초과)")
+            Log.d(TAG, "[CAM] 해제(거리초과) duration=${trackingDuration}ms")
+            if (suspiciousQuickRelease) {
+                passedCameras.add(PassedCamera(cam.lat, cam.lon, now))
+                Log.d(TAG, "  → 빠른해제 쿨다운 등록(반대차선 의심)")
+            }
             resetTracking()
             return idle()
         }
@@ -735,8 +742,16 @@ class CameraEngine(
         return buildAlert(roadDist, straightDist.toInt(), cam, speedKmh, overThreshold, now)
     }
 
-    private fun onCameraPassed(cam: CameraRecord, now: Long, speedKmh: Int, overThreshold: Int): AlertInfo {
-        passedCameras.add(PassedCamera(cam.lat, cam.lon, now))
+    private fun onCameraPassed(
+        cam: CameraRecord,
+        now: Long,
+        speedKmh: Int,
+        overThreshold: Int,
+        skipPassedRecord: Boolean = false
+    ): AlertInfo {
+        if (!skipPassedRecord) {
+            passedCameras.add(PassedCamera(cam.lat, cam.lon, now))
+        }
 
         if (cam.safetyCode == SafetyCode.SECTION_OUT && sectionEntry != null) {
             val elapsed = (now - sectionEntryTime) / 1000.0
@@ -823,7 +838,7 @@ class CameraEngine(
     }
 
     private fun isInCooldown(cam: CameraRecord): Boolean =
-        passedCameras.any { distanceBetween(it.lat, it.lon, cam.lat, cam.lon) < 50.0 }
+        passedCameras.any { distanceBetween(it.lat, it.lon, cam.lat, cam.lon) < COOLDOWN_CAPTURE_RADIUS_M }
 
     private fun distanceBetween(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
         val results = FloatArray(1)
