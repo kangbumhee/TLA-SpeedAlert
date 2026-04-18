@@ -3,6 +3,7 @@ package com.teslcan.app
 import android.util.Log
 import org.json.JSONObject
 import java.net.HttpURLConnection
+import kotlin.math.roundToInt
 import java.net.URL
 import kotlin.math.cos
 import kotlin.math.sqrt
@@ -56,6 +57,62 @@ object RouteService {
     ): RouteResult {
         val url = buildUrl(fromLon, fromLat, toLon, toLat) ?: return fallback(straightDist)
         return executeRequest(url, straightDist)
+    }
+
+    /**
+     * OSRM Nearest: 카메라 좌표를 차량 진행 방향에 맞는 도로 세그먼트에 스냅할 수 있는지.
+     * [bearings]=`방위,허용각` — heading 미상 카메라의 반대차선·측면 오탐 완화용. Mapbox 전용 빌드에서는 true.
+     * 네트워크/파싱 실패 시 true(후보 유지).
+     */
+    fun nearestSnapAcceptsBearing(
+        camLat: Double,
+        camLon: Double,
+        vehicleBearingDeg: Double,
+        bearingSpreadDeg: Int = 45
+    ): Boolean {
+        if (BuildConfig.USE_MAPBOX) return true
+        val nearestBase = buildOsrmNearestServiceBase() ?: return true
+        val br = ((vehicleBearingDeg % 360.0) + 360.0) % 360.0
+        val brInt = ((br.roundToInt() % 360) + 360) % 360
+        val url = "$nearestBase/$camLon,$camLat?number=1&bearings=$brInt,$bearingSpreadDeg"
+        return try {
+            val conn = URL(url).openConnection() as HttpURLConnection
+            conn.connectTimeout = TIMEOUT
+            conn.readTimeout = TIMEOUT
+            conn.requestMethod = "GET"
+            conn.setRequestProperty("User-Agent", USER_AGENT)
+            val http = conn.responseCode
+            if (http != 200) {
+                Log.w(TAG, "nearest HTTP $http URL=${urlForLog(url)}")
+                conn.disconnect()
+                return true
+            }
+            val body = conn.inputStream.bufferedReader().readText()
+            conn.disconnect()
+            val obj = JSONObject(body)
+            val resultCode = obj.optString("code", "")
+            if (resultCode != "Ok") {
+                Log.d(TAG, "nearest code=$resultCode (${urlForLog(url)})")
+                return false
+            }
+            val wps = obj.optJSONArray("waypoints")
+            wps != null && wps.length() > 0
+        } catch (e: Exception) {
+            Log.w(TAG, "nearest 실패: ${e.javaClass.simpleName}: ${e.message} URL=${urlForLog(url)}")
+            true
+        }
+    }
+
+    /** `.../route/v1/driving` → `.../nearest/v1/driving` */
+    private fun buildOsrmNearestServiceBase(): String? {
+        val raw = BuildConfig.OSRM_ROUTE_BASE_URL.trim().trimEnd('/')
+        if (raw.isBlank()) return null
+        val replaced = raw.replace("/route/v1/", "/nearest/v1/")
+        if (replaced == raw || !replaced.contains("/nearest/v1/")) {
+            Log.w(TAG, "OSRM URL에 /route/v1/ 없음 — nearest 생략")
+            return null
+        }
+        return replaced
     }
 
     private fun buildUrl(fromLon: Double, fromLat: Double, toLon: Double, toLat: Double): String? {

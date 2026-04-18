@@ -48,8 +48,8 @@ class CameraEngine(
         private const val PASS_DISTANCE = 50.0
 
         private const val AHEAD_ANGLE = 40.0
-        /** 차량→카메라 방위가 진행 방향과 이 각도(°) 이내면 전방(도시부 측면 카메라 억제) */
-        private const val FORWARD_TO_CAM_DEG = 40.0
+        /** 차량→카메라 방위가 진행 방향과 이 각도(°) 이내면 전방(측면·반대차선 억제 강화) */
+        private const val FORWARD_TO_CAM_DEG = 25.0
 
         /** 라우팅 API 실패 시 직선 fallback — 매우 보수적(평행도로 오탐 방지) */
         private const val FALLBACK_MAX_STRAIGHT_M = 300.0
@@ -396,7 +396,35 @@ class CameraEngine(
             var bestStraight = 0.0
             var pendingUnknownHeading: Candidate? = null
 
-            for (candidate in topCandidates) {
+            val routeCandidates = if (curBearingValid) {
+                topCandidates.filter { c ->
+                    val hid = c.cam.direction?.toInt() ?: -1
+                    if (hid >= 0) return@filter true
+                    val ok = RouteService.nearestSnapAcceptsBearing(c.cam.lat, c.cam.lon, curBearing, 45)
+                    if (!ok) {
+                        Log.d(
+                            TAG,
+                            "  OSRM nearest 기각(heading 미상·진행방향 스냅 불가): " +
+                                "${c.cam.safetyCode.label} dist=${c.dist.toInt()}m"
+                        )
+                    }
+                    ok
+                }
+            } else {
+                topCandidates
+            }
+            if (routeCandidates.isEmpty()) {
+                Handler(Looper.getMainLooper()).post {
+                    routeRequestInProgress = false
+                    Log.d(TAG, "적합 카메라 없음 (nearest로 후보 ${topCandidates.size}개 전원 탈락)")
+                }
+                return@Thread
+            }
+            if (routeCandidates.size < topCandidates.size) {
+                Log.d(TAG, "OSRM nearest: 후보 ${topCandidates.size}→${routeCandidates.size}개")
+            }
+
+            for (candidate in routeCandidates) {
                 val route = router.getRoute(curLat, curLon, candidate.cam.lat, candidate.cam.lon, candidate.dist)
                 if (route.success) {
                     val ratio = if (candidate.dist > 0.0) route.roadDistance / candidate.dist else 0.0
