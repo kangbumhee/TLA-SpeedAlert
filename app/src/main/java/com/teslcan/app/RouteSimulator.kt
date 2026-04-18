@@ -69,6 +69,9 @@ class RouteSimulator {
             field = value.coerceIn(0.25, 5.0)
         }
 
+    /** null이면 각 SimPoint의 시나리오 속도 사용. 설정 시 CameraEngine 등에 전달되는 차속(km/h). */
+    var speedOverrideKmh: Int? = null
+
     fun getTickIntervalMs(): Long =
         (1000.0 / speedMultiplier).toLong().coerceIn(100L, 4000L)
 
@@ -215,6 +218,7 @@ class RouteSimulator {
         handler.removeCallbacks(tickRunnable)
         routePoints.clear()
         currentIndex = 0
+        speedOverrideKmh = null
     }
 
     fun isActive(): Boolean = isRunning
@@ -228,7 +232,8 @@ class RouteSimulator {
                 return
             }
             val p = routePoints[currentIndex]
-            onLocationUpdate?.invoke(p.lat, p.lon, p.speedKmh, 12, true, p.bearing)
+            val effectiveSpeed = speedOverrideKmh ?: p.speedKmh
+            onLocationUpdate?.invoke(p.lat, p.lon, effectiveSpeed, 12, true, p.bearing)
             currentIndex++
             handler.postDelayed(this, getTickIntervalMs())
         }

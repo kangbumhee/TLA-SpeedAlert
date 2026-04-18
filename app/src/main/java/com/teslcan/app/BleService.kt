@@ -200,6 +200,7 @@ class BleService : Service() {
             alertPlayer.speakEvent("시뮬레이션을 시작합니다")
         }
         routeSimulator?.speedMultiplier = 1.0
+        routeSimulator?.speedOverrideKmh = null
         routeSimulator?.startPreset(presetName, speedKmh)
     }
 
@@ -229,6 +230,7 @@ class BleService : Service() {
             alertPlayer.speakEvent("시뮬레이션을 시작합니다")
         }
         routeSimulator?.speedMultiplier = 1.0
+        routeSimulator?.speedOverrideKmh = null
         routeSimulator?.startRoute(sLat, sLon, eLat, eLon, speedKmh)
     }
 
@@ -254,6 +256,13 @@ class BleService : Service() {
             if (isSimulationMode) rs.notifyTickIntervalChanged()
         }
     }
+
+    /** 시뮬 차속(km/h). null이면 시나리오·경로 보간 속도 사용. */
+    fun setSimulationSpeedOverride(kmh: Int?) {
+        routeSimulator?.speedOverrideKmh = kmh
+    }
+
+    fun getSimulationSpeedOverride(): Int? = routeSimulator?.speedOverrideKmh
 
     /** 설정 화면에서 DB 갱신 후 카메라 개수 UI 동기화용 */
     fun refreshCameraCount() {

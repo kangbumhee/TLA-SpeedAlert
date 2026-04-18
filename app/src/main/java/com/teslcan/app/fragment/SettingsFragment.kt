@@ -202,6 +202,14 @@ class SettingsFragment : Fragment() {
         val tvSimSpeedMult = v.findViewById<TextView>(R.id.tvSimSpeedMult)
         val spinnerSimSpeed = v.findViewById<Spinner>(R.id.spinnerSimSpeed)
         val tvSimStatus = v.findViewById<TextView>(R.id.tvSimStatus)
+        val seekCarSpeed = v.findViewById<SeekBar>(R.id.seekSimCarSpeed)
+        val tvCarSpeed = v.findViewById<TextView>(R.id.tvSimCarSpeed)
+        val btnCarSpeedAuto = v.findViewById<Button>(R.id.btnCarSpeedAuto)
+        val btnCarSpeed30 = v.findViewById<Button>(R.id.btnCarSpeed30)
+        val btnCarSpeed50 = v.findViewById<Button>(R.id.btnCarSpeed50)
+        val btnCarSpeed80 = v.findViewById<Button>(R.id.btnCarSpeed80)
+        val btnCarSpeed100 = v.findViewById<Button>(R.id.btnCarSpeed100)
+        val btnCarSpeed120 = v.findViewById<Button>(R.id.btnCarSpeed120)
 
         val speeds = intArrayOf(40, 60, 80, 100)
 
@@ -220,6 +228,43 @@ class SettingsFragment : Fragment() {
             }
         }
 
+        fun applyCarSpeed(kmh: Int?) {
+            val act = activity as? MainActivity ?: return
+            act.whenServiceReady { svc ->
+                svc.setSimulationSpeedOverride(kmh)
+            }
+            if (kmh == null || kmh == 0) {
+                tvCarSpeed.text = "자동"
+                seekCarSpeed.progress = 0
+            } else {
+                tvCarSpeed.text = "${kmh} km/h"
+                seekCarSpeed.progress = kmh.coerceIn(1, 150)
+            }
+        }
+
+        seekCarSpeed.max = 150
+        seekCarSpeed.progress = 0
+        seekCarSpeed.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(s: SeekBar?, progress: Int, fromUser: Boolean) {
+                if (!fromUser) return
+                if (progress == 0) {
+                    applyCarSpeed(null)
+                } else {
+                    applyCarSpeed(progress)
+                }
+            }
+
+            override fun onStartTrackingTouch(s: SeekBar?) {}
+            override fun onStopTrackingTouch(s: SeekBar?) {}
+        })
+
+        btnCarSpeedAuto.setOnClickListener { applyCarSpeed(null) }
+        btnCarSpeed30.setOnClickListener { applyCarSpeed(30) }
+        btnCarSpeed50.setOnClickListener { applyCarSpeed(50) }
+        btnCarSpeed80.setOnClickListener { applyCarSpeed(80) }
+        btnCarSpeed100.setOnClickListener { applyCarSpeed(100) }
+        btnCarSpeed120.setOnClickListener { applyCarSpeed(120) }
+
         fun launchSim(preset: String) {
             val act = activity as? MainActivity ?: return
             act.whenServiceReady { svc ->
@@ -231,6 +276,8 @@ class SettingsFragment : Fragment() {
                 val tick = svc.routeSimulator?.getTickIntervalMs() ?: 1000L
                 tvSimStatus.text = "시뮬 진행: $label (${speed} km/h, ${"%.1f".format(mult)}x / 틱${tick}ms)"
                 refreshSimSpeedLabel()
+                seekCarSpeed.progress = 0
+                tvCarSpeed.text = "자동"
                 svc.routeSimulator?.onSimulationEnd = {
                     activity?.runOnUiThread {
                         btnSimStop.isEnabled = false
@@ -262,6 +309,8 @@ class SettingsFragment : Fragment() {
                 svc.stopSimulation()
                 btnSimStop.isEnabled = false
                 tvSimStatus.text = "시뮬 중지됨"
+                seekCarSpeed.progress = 0
+                tvCarSpeed.text = "자동"
             }
         }
 
