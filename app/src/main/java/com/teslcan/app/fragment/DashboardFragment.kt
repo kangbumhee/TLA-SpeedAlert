@@ -314,8 +314,8 @@ var kakaoCfg={
   92:{color:'#AA44FF',icon:'\u23F1',label:'\uAD6C\uAC04\uC2DC'},
   93:{color:'#AA44FF',icon:'\u23F1',label:'\uAD6C\uAC04\uC885'},
   96:{color:'#9933CC',icon:'\u23F1',label:'\uAD6C\uAC04'},
-  87:{color:'#3388ff',icon:'\uD83C\uDD7F',label:'\uC8FC\uC815\uCC28'},
-  84:{color:'#3388ff',icon:'\uD83D\uDE8C',label:'\uBC84\uC2A4'},
+  87:{color:'#78909C',icon:'\uD83C\uDD7F',label:'\uC8FC\uC815\uCC28'},
+  84:{color:'#546E7A',icon:'\uD83D\uDE8C',label:'\uBC84\uC2A4'},
   100:{color:'#FF4444',icon:'\uD83D\uDCE6',label:'\uBC15\uC2A4'},
   11:{color:'#00CC00',icon:'\uD83C\uDFEB',label:'\uC2A4\uCFE8'}
 };
@@ -373,18 +373,20 @@ function addNearbyCamera(lat,lon,speedLimit,safetyCode,heading){
   var cfg=pickCfg(safetyCode);
   var sl=parseInt(speedLimit,10);
   console.log('addNearbyCamera code='+safetyCode+' limit='+sl+' h='+heading);
+  var mid, sub;
   if(sl>0){
-    var icon=L.divIcon({
-      className:'cam-nearby',
-      html:'<div style="text-align:center;">'
-        +'<div style="background:'+cfg.color+';color:#fff;border-radius:50%;width:28px;height:28px;display:flex;align-items:center;justify-content:center;font-weight:bold;font-size:11px;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.5);">'+sl+'</div>'
-        +'<div style="font-size:8px;color:'+cfg.color+';text-shadow:0 1px 2px #000;margin-top:1px;white-space:nowrap;">'+cfg.icon+' '+cfg.label+'</div></div>',
-      iconSize:[32,38],iconAnchor:[16,19]
-    });
-    nearbyMarkers.push(L.marker([lat,lon],{icon:icon,interactive:false}).addTo(map));
+    mid='<div style="background:'+cfg.color+';color:#fff;border-radius:50%;width:28px;height:28px;display:flex;align-items:center;justify-content:center;font-weight:bold;font-size:11px;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.5);">'+sl+'</div>';
+    sub='<div style="font-size:8px;color:'+cfg.color+';text-shadow:0 1px 2px #000;margin-top:1px;white-space:nowrap;">'+cfg.icon+' '+cfg.label+'</div>';
   } else {
-    nearbyMarkers.push(L.circleMarker([lat,lon],{radius:5,color:'#3388ff',fillColor:'#3388ff',fillOpacity:0.7,weight:1,interactive:false}).addTo(map));
+    mid='<div style="background:'+cfg.color+';color:#fff;border-radius:50%;width:28px;height:28px;display:flex;align-items:center;justify-content:center;font-size:15px;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.5);">'+cfg.icon+'</div>';
+    sub='<div style="font-size:8px;color:'+cfg.color+';text-shadow:0 1px 2px #000;margin-top:1px;max-width:72px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+cfg.label+'</div>';
   }
+  var icon=L.divIcon({
+    className:'cam-nearby',
+    html:'<div style="text-align:center;">'+mid+sub+'</div>',
+    iconSize:[32,38],iconAnchor:[16,19]
+  });
+  nearbyMarkers.push(L.marker([lat,lon],{icon:icon,interactive:false}).addTo(map));
 }
 </script></body></html>
         """.trimIndent()
