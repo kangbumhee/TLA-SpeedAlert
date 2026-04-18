@@ -426,6 +426,22 @@ class CameraEngine(
                             continue
                         }
                     }
+                    if (curBearingValid && route.routePoints.size >= 2) {
+                        val pts = route.routePoints
+                        val p0 = pts[pts.size - 2]
+                        val p1 = pts[pts.size - 1]
+                        val approachBearing = bearingBetween(p0.lat, p0.lon, p1.lat, p1.lon)
+                        val approachDiff = angleDiff(curBearing, approachBearing)
+                        if (approachDiff > 90.0) {
+                            Log.d(
+                                TAG,
+                                "  → 도착방향 불일치: 접근=${"%.0f".format(Locale.US, approachBearing)}° " +
+                                    "내bearing=${"%.0f".format(Locale.US, curBearing)}° " +
+                                    "Δ=${"%.0f".format(Locale.US, approachDiff)}° 스킵"
+                            )
+                            continue
+                        }
+                    }
                     bestCam = candidate.cam
                     bestRoute = route
                     bestStraight = candidate.dist
