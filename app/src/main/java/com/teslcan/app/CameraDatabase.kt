@@ -379,7 +379,8 @@ class CameraDatabase(private val context: Context) : SQLiteOpenHelper(context, "
         lon: Double,
         headingDeg: Float?,
         maxDistanceMeters: Double = 1500.0,
-        aheadAngle: Float = 40f
+        /** 진행 방위가 있을 때 카메라 방위와의 최대 편차(반각). ±45° = 전방 90° 부채꼴 */
+        aheadAngle: Float = 45f
     ): List<CameraRecord> {
         val db = readableDatabase
         val dLat = maxDistanceMeters / 111000.0

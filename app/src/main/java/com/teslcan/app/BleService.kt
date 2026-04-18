@@ -26,6 +26,10 @@ import android.os.Looper
 import android.os.ParcelUuid
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.sin
+import kotlin.math.sqrt
 import java.util.UUID
 
 class BleService : Service() {
@@ -35,6 +39,10 @@ class BleService : Service() {
         private const val CHANNEL_ID = "camalert_channel"
         private const val NOTIFICATION_ID = 1
         private const val TARGET_DEVICE_NAME = "TeslaCAN"
+        /** BLE GPS로 진행 방위 추정 시 최소 이동 거리(m) */
+        private const val MIN_HEADING_MOVE_M = 5.0
+        /** 진행 방위 반영 최소 차속(km/h) */
+        private const val MIN_HEADING_SPEED_KMH = 3
         val SERVICE_UUID: UUID = UUID.fromString("0000ff01-0000-1000-8000-00805f9b34fb")
         val CHAR_SPEED_UUID: UUID = UUID.fromString("0000ff03-0000-1000-8000-00805f9b34fb")
         val CHAR_GPS_UUID: UUID = UUID.fromString("0000ff04-0000-1000-8000-00805f9b34fb")
@@ -76,6 +84,9 @@ class BleService : Service() {
     private var simulationBearingDeg: Double = -1.0
     private var lastGpsValid = false
     private var overspeedLogActive = false
+    /** 실차 GPS: 직전 fix 좌표(진행 방위 추정용). 시뮬 중에는 사용하지 않음 */
+    private var lastCourseLat: Double? = null
+    private var lastCourseLon: Double? = null
 
     private val servicePrefs by lazy {
         getSharedPreferences("ble_service", Context.MODE_PRIVATE)
@@ -179,6 +190,8 @@ class BleService : Service() {
 
     fun startSimulation(presetName: String, speedKmh: Int = 60) {
         isSimulationMode = true
+        lastCourseLat = null
+        lastCourseLon = null
         stopScan()
         try {
             gatt?.close()
@@ -206,6 +219,8 @@ class BleService : Service() {
         speedKmh: Int = 60
     ) {
         isSimulationMode = true
+        lastCourseLat = null
+        lastCourseLon = null
         stopScan()
         try {
             gatt?.close()
@@ -229,6 +244,8 @@ class BleService : Service() {
         routeSimulator?.stop()
         isSimulationMode = false
         simulationBearingDeg = -1.0
+        lastCourseLat = null
+        lastCourseLon = null
         cameraEngine.reset()
         alertPlayer.stop()
         handler.post {
@@ -356,6 +373,35 @@ class BleService : Service() {
         handler.post { onSpeedUpdate?.invoke(currentSpeed) }
     }
 
+    /** BLE 연속 좌표로 진행 방위를 넣어 DB 전방(±45°) 필터가 동작하도록 함 */
+    private fun feedCourseBearingFromBleGps() {
+        val pl = lastCourseLat
+        val po = lastCourseLon
+        if (pl != null && po != null) {
+            val moved = flatMeters(pl, po, currentLat, currentLon)
+            if (moved >= MIN_HEADING_MOVE_M && currentSpeed >= MIN_HEADING_SPEED_KMH) {
+                cameraEngine.updateBearing(courseBearingDeg(pl, po, currentLat, currentLon))
+            }
+        }
+        lastCourseLat = currentLat
+        lastCourseLon = currentLon
+    }
+
+    private fun flatMeters(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+        val dLat = (lat2 - lat1) * 111320.0
+        val dLon = (lon2 - lon1) * 111320.0 * cos(Math.toRadians(lat1))
+        return sqrt(dLat * dLat + dLon * dLon)
+    }
+
+    private fun courseBearingDeg(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Float {
+        val dLon = Math.toRadians(lon2 - lon1)
+        val la1 = Math.toRadians(lat1)
+        val la2 = Math.toRadians(lat2)
+        val y = sin(dLon) * cos(la2)
+        val x = cos(la1) * sin(la2) - sin(la1) * cos(la2) * cos(dLon)
+        return ((Math.toDegrees(atan2(y, x)) + 360.0) % 360.0).toFloat()
+    }
+
     private fun onGps(data: ByteArray) {
         if (data.size < 10) return
         val latInt = ((data[0].toInt() and 0xFF) shl 24) or ((data[1].toInt() and 0xFF) shl 16) or
@@ -375,9 +421,14 @@ class BleService : Service() {
         if (fix) {
             if (!lastGpsValid) alertPlayer.speakEvent("GPS 연결됨. 위성 ${sats}개")
             lastGpsValid = true
+            if (!isSimulationMode && ::cameraEngine.isInitialized) {
+                feedCourseBearingFromBleGps()
+            }
             checkCamera()
         } else if (lastGpsValid) {
             lastGpsValid = false
+            lastCourseLat = null
+            lastCourseLon = null
             overspeedLogActive = false
             cameraEngine.reset()
             handler.post {

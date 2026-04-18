@@ -42,7 +42,8 @@ class CameraEngine(
         private const val ALERT_PHASE3 = 100.0
         private const val LOST_DISTANCE = 50.0
         private const val COOLDOWN_MS = 60_000L
-        private const val AHEAD_ANGLE = 40f
+        /** 진행 방향 기준 전방 부채꼴 (±45°) */
+        private const val AHEAD_ANGLE_DEG = 45f
 
         fun idle(): AlertInfo =
             AlertInfo(0, 0, 0, SafetyCode.UNKNOWN, false, 0.0, 0.0)
@@ -108,11 +109,12 @@ class CameraEngine(
             lon,
             heading,
             maxDistanceMeters = SCAN_RADIUS,
-            aheadAngle = if (heading != null) AHEAD_ANGLE else 360f
+            aheadAngle = if (heading != null) AHEAD_ANGLE_DEG else 360f
         )
-        val cameras = raw.filter {
-            DrivingProfile.isTypeEnabled(it.safetyCode.toLegacyCamType(), settings)
-        }.filter { it.id !in passedCooldown }
+        val cameras = raw
+            .filter { isSpeedAlertRelevant(it.safetyCode, it.speedLimit) }
+            .filter { DrivingProfile.isTypeEnabled(it.safetyCode.toLegacyCamType(), settings) }
+            .filter { it.id !in passedCooldown }
 
         if (cameras.isEmpty()) {
             resetTracking()
@@ -219,4 +221,24 @@ class CameraEngine(
             cos(Math.toRadians(lat1)) * cos(Math.toRadians(lat2)) * sin(dLon / 2).pow(2)
         return r * 2 * atan2(sqrt(a), sqrt(1 - a))
     }
+}
+
+/**
+ * 과속·구간·보호구역(제한속도 있음) 등 SpeedAlert 대상.
+ * 주정차·신호만·버스전용·통행위반 등은 제외.
+ */
+private fun isSpeedAlertRelevant(code: SafetyCode, speedLimit: Int): Boolean = when (code) {
+    SafetyCode.FIXED_SPEED,
+    SafetyCode.MOVABLE_SPEED,
+    SafetyCode.SIGNAL_AND_SPEED,
+    SafetyCode.SECTION_IN,
+    SafetyCode.SECTION_OUT,
+    SafetyCode.SECTION_ZONE,
+    SafetyCode.BACKWARD_SPEED,
+    SafetyCode.BACKWARD_SIGNAL_SPEED,
+    SafetyCode.LANE_AND_SPEED,
+    SafetyCode.BOXED_SPEED,
+    SafetyCode.BUSLANE_AND_SPEED -> true
+    SafetyCode.CHILDREN_ZONE -> speedLimit > 0
+    else -> false
 }
