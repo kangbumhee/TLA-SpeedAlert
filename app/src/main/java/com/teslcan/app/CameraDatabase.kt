@@ -430,9 +430,10 @@ class CameraDatabase(private val context: Context) : SQLiteOpenHelper(context, "
                 )
             }
         }
+        // 가까운 카메라 우선, 동일 거리면 safetyCode.priority(낮을수록 긴급) 순
         return results.sortedWith(
-            compareBy<CameraRecord> { it.safetyCode.priority }
-                .thenBy { haversineMeters(lat, lon, it.lat, it.lon) }
+            compareBy<CameraRecord> { haversineMeters(lat, lon, it.lat, it.lon) }
+                .thenBy { it.safetyCode.priority }
         )
     }
 

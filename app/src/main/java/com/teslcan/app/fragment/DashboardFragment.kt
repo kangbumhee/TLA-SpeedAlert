@@ -189,6 +189,15 @@ class DashboardFragment : Fragment() {
             }
             val displayPhase = if (lastUiPhase in 1..4) lastUiPhase else 2
             applyPhaseColors(displayPhase, info)
+            tvAlertTitle.text = "접근 중 (음성 없음)"
+            tvAlertTitle.setTextColor(Color.parseColor("#8B949E"))
+            if (mapReady && info.camLat != 0.0 && info.camLon != 0.0) {
+                val os = if (info.overspeed) 1 else 0
+                mapView.evaluateJavascript(
+                    "showCamera(${info.camLat},${info.camLon},${info.safetyCode.code},${info.speedLimit},${info.distance},1,$os);",
+                    null
+                )
+            }
             return
         }
 

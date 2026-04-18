@@ -33,7 +33,10 @@ class CameraEngine(
     companion object {
         private const val TAG = "CameraEngine"
 
+        /** DB·지도 마커 조회 반경 */
         const val SCAN_RADIUS = 1500.0
+        /** 음성·알림 카드에 쓸 최대 거리 (이 밖은 엔진이 무시) */
+        const val ALERT_RADIUS_M = 600.0
         private const val ALERT_PHASE1 = 500.0
         private const val ALERT_PHASE2 = 300.0
         private const val ALERT_PHASE3 = 100.0
@@ -116,8 +119,17 @@ class CameraEngine(
             return idle()
         }
 
-        val target = cameras.first()
-        val dist = haversine(lat, lon, target.lat, target.lon)
+        val withDist = cameras.map { cam -> cam to haversine(lat, lon, cam.lat, cam.lon) }
+        val inAlertRadius = withDist.filter { (_, d) -> d <= ALERT_RADIUS_M }
+        if (inAlertRadius.isEmpty()) {
+            resetTracking()
+            return idle()
+        }
+
+        val (target, dist) = inAlertRadius.minWith(
+            compareBy<Pair<CameraRecord, Double>> { it.second }
+                .thenBy { it.first.safetyCode.priority }
+        )
 
         if (trackingCamera != null && trackingCamera!!.id != target.id) {
             resetTracking()
@@ -166,12 +178,12 @@ class CameraEngine(
         }
 
         val onViolation = target.speedLimit > 0 && speedKmh > target.speedLimit + overThreshold
+        // 500m 밖~600m: 음성 없음(대시보드 phase -1). 500m 이내부터 기존 2/3/4 단계.
         val phase = when {
             dist <= ALERT_PHASE3 -> 4
             dist <= ALERT_PHASE2 -> 3
             dist <= ALERT_PHASE1 -> 2
-            dist <= SCAN_RADIUS -> 1
-            else -> 0
+            else -> -1
         }
 
         if (phase > lastEnginePhase) {

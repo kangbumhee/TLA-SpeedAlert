@@ -77,7 +77,8 @@ class RouteSimulator {
             "seocho_yangjae" -> startRoute(37.491912, 127.007578, 37.484100, 127.034000, speedKmh)
             "yeongdeungpo_yeouido" -> startRoute(37.515836, 126.907299, 37.521600, 126.924300, speedKmh)
             "jongro_dongdaemun" -> startRoute(37.570100, 126.982600, 37.571400, 127.009800, speedKmh)
-            "camera_dense" -> startRoute(37.482661, 127.012154, 37.531602, 127.149541, speedKmh)
+            // 강남 일대 짧은 구간(과도하게 먼 카메라까지 경로에 포함되지 않도록 ~4km)
+            "camera_dense" -> startRoute(37.498200, 127.027400, 37.507800, 127.041000, speedKmh)
             else -> Log.e(TAG, "알 수 없는 프리셋: $name")
         }
     }
