@@ -7,6 +7,7 @@ import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.pow
+import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.math.sqrt
 
@@ -15,6 +16,18 @@ class RouteSimulator {
     companion object {
         private const val TAG = "RouteSim"
         private const val UPDATE_INTERVAL_MS = 1000L
+        private const val SCENARIO_TICK_SEC = 1.0
+
+        fun scenarioDisplayName(preset: String): String = when (preset) {
+            "scenario_basic" -> "기본 주행 (실도로)"
+            "scenario_dense", "camera_dense" -> "카메라 밀집 (실도로)"
+            "scenario_highway" -> "고속 구간 (실도로)"
+            "gangnam_jamsil" -> "강남→잠실 (OSRM)"
+            "seocho_yangjae" -> "서초→양재 (OSRM)"
+            "yeongdeungpo_yeouido" -> "영등포→여의도 (OSRM)"
+            "jongro_dongdaemun" -> "종로→동대문 (OSRM)"
+            else -> preset
+        }
     }
 
     data class SimPoint(val lat: Double, val lon: Double, val bearing: Double, val speedKmh: Int)
@@ -71,16 +84,91 @@ class RouteSimulator {
         }.start()
     }
 
+    /**
+     * UI 스피너 기준 속도(기본 60)에 맞춰 시나리오 구간 속도를 스케일.
+     * 실도로 웨이포인트 → 1초 간격 보간 + 이전→현재 bearing.
+     */
     fun startPreset(name: String, speedKmh: Int = 60) {
         when (name) {
+            "scenario_basic" -> startEmbeddedScenario(ScenarioWaypoints.BASIC, speedKmh, "scenario_basic")
+            "scenario_dense", "camera_dense" ->
+                startEmbeddedScenario(ScenarioWaypoints.DENSE, speedKmh, "scenario_dense")
+            "scenario_highway" -> startEmbeddedScenario(ScenarioWaypoints.HIGHWAY, speedKmh, "scenario_highway")
             "gangnam_jamsil" -> startRoute(37.497952, 127.027619, 37.513950, 127.102102, speedKmh)
             "seocho_yangjae" -> startRoute(37.491912, 127.007578, 37.484100, 127.034000, speedKmh)
             "yeongdeungpo_yeouido" -> startRoute(37.515836, 126.907299, 37.521600, 126.924300, speedKmh)
             "jongro_dongdaemun" -> startRoute(37.570100, 126.982600, 37.571400, 127.009800, speedKmh)
-            // 강남 일대 짧은 구간(과도하게 먼 카메라까지 경로에 포함되지 않도록 ~4km)
-            "camera_dense" -> startRoute(37.498200, 127.027400, 37.507800, 127.041000, speedKmh)
             else -> Log.e(TAG, "알 수 없는 프리셋: $name")
         }
+    }
+
+    private fun startEmbeddedScenario(waypoints: List<ScenarioWp>, speedKmhFromUi: Int, label: String) {
+        stop()
+        if (waypoints.size < 2) {
+            Log.e(TAG, "웨이포인트 부족: $label")
+            return
+        }
+        val scale = speedKmhFromUi / 60.0
+        routePoints = expandWaypointsToSimPath(waypoints, SCENARIO_TICK_SEC, scale)
+        currentIndex = 0
+        isRunning = true
+        val km = pathLengthMeters(routePoints) / 1000.0
+        Log.d(TAG, "실도로 시뮬 [$label]: 원본 ${waypoints.size}wp → ${routePoints.size}틱, ${"%.1f".format(km)}km")
+        handler.post {
+            onRouteReady?.invoke(routePoints.size, km)
+            handler.post(tickRunnable)
+        }
+    }
+
+    private fun pathLengthMeters(pts: List<SimPoint>): Double {
+        if (pts.size < 2) return 0.0
+        var t = 0.0
+        for (i in 0 until pts.size - 1) {
+            t += haversine(pts[i].lat, pts[i].lon, pts[i + 1].lat, pts[i + 1].lon)
+        }
+        return t
+    }
+
+    private fun expandWaypointsToSimPath(
+        wps: List<ScenarioWp>,
+        intervalSec: Double,
+        speedScale: Double
+    ): MutableList<SimPoint> {
+        val samples = mutableListOf<Triple<Double, Double, Int>>()
+        for (i in 0 until wps.size - 1) {
+            val from = wps[i]
+            val to = wps[i + 1]
+            val speedKmh = (from.speedKmh * speedScale).coerceIn(10.0, 130.0)
+            val speedMps = speedKmh / 3.6
+            val segDist = haversine(from.lat, from.lon, to.lat, to.lon)
+            if (segDist < 0.5) continue
+            val segTime = segDist / speedMps
+            val steps = (segTime / intervalSec).toInt().coerceAtLeast(1)
+            for (s in 0 until steps) {
+                val frac = s.toDouble() / steps
+                val lat = from.lat + (to.lat - from.lat) * frac
+                val lon = from.lon + (to.lon - from.lon) * frac
+                samples.add(Triple(lat, lon, speedKmh.roundToInt()))
+            }
+        }
+        val last = wps.last()
+        val lastSpeed = (last.speedKmh * speedScale).coerceIn(10.0, 130.0).roundToInt()
+        samples.add(Triple(last.lat, last.lon, lastSpeed))
+
+        val out = mutableListOf<SimPoint>()
+        for (i in samples.indices) {
+            val (la, lo, sp) = samples[i]
+            val br = when {
+                i < samples.size - 1 ->
+                    calcBearing(la, lo, samples[i + 1].first, samples[i + 1].second)
+                i > 0 ->
+                    calcBearing(samples[i - 1].first, samples[i - 1].second, la, lo)
+                else ->
+                    calcBearing(la, lo, samples[i + 1].first, samples[i + 1].second)
+            }
+            out.add(SimPoint(la, lo, br, sp))
+        }
+        return out
     }
 
     fun stop() {

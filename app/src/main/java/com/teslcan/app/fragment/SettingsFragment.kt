@@ -16,6 +16,7 @@ import com.teslcan.app.DbUpdater
 import com.teslcan.app.FirmwareUpdater
 import com.teslcan.app.MainActivity
 import com.teslcan.app.R
+import com.teslcan.app.RouteSimulator
 import com.teslcan.app.SettingsStore
 
 class SettingsFragment : Fragment() {
@@ -209,7 +210,8 @@ class SettingsFragment : Fragment() {
                 val speed = getSimSpeed()
                 svc.startSimulation(preset, speed)
                 btnSimStop.isEnabled = true
-                tvSimStatus.text = "시뮬 진행: $preset (${speed} km/h)"
+                val label = RouteSimulator.scenarioDisplayName(preset)
+                tvSimStatus.text = "시뮬 진행: $label (${speed} km/h)"
                 svc.routeSimulator?.onSimulationEnd = {
                     activity?.runOnUiThread {
                         btnSimStop.isEnabled = false
@@ -219,9 +221,9 @@ class SettingsFragment : Fragment() {
             }
         }
 
-        btnSimGangnam.setOnClickListener { launchSim("gangnam_jamsil") }
-        btnSimSeocho.setOnClickListener { launchSim("seocho_yangjae") }
-        btnSimCamera.setOnClickListener { launchSim("camera_dense") }
+        btnSimGangnam.setOnClickListener { launchSim("scenario_basic") }
+        btnSimSeocho.setOnClickListener { launchSim("scenario_highway") }
+        btnSimCamera.setOnClickListener { launchSim("scenario_dense") }
         btnSimStop.setOnClickListener {
             (activity as? MainActivity)?.whenServiceReady { svc ->
                 svc.stopSimulation()

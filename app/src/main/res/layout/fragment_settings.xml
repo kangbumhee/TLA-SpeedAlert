@@ -403,7 +403,7 @@
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:text="강남→잠실"
+                    android:text="기본주행"
                     android:textSize="11sp" />
 
                 <Button
@@ -412,7 +412,7 @@
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
                     android:layout_marginStart="4dp"
-                    android:text="서초→양재"
+                    android:text="고속구간"
                     android:textSize="11sp" />
 
                 <Button
