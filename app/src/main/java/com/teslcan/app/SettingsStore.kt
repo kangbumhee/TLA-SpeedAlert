@@ -15,7 +15,7 @@ class SettingsStore(context: Context) {
         set(v) = prefs.edit().putBoolean("en_fixed", v).apply()
 
     var enableMobile: Boolean
-        get() = prefs.getBoolean("en_mobile", false)
+        get() = prefs.getBoolean("en_mobile", true)
         set(v) = prefs.edit().putBoolean("en_mobile", v).apply()
 
     var enableSection: Boolean

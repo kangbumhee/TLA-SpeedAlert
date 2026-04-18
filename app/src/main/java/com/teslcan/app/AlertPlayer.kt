@@ -355,11 +355,15 @@ class AlertPlayer(private val context: Context) {
 
     /** CameraEngine v2 [AlertInfo] → 기존 handleAlert 브리지 (거리 구간 토글 정합). */
     fun handleSafetyAlert(info: AlertInfo, speedKmh: Int) {
-        val zone = when {
-            info.distance <= 100 -> 100
-            info.distance <= 300 -> 300
-            info.distance <= 500 -> 500
-            else -> 1000
+        val zone = if (info.zoneTriggered > 0) {
+            info.zoneTriggered
+        } else {
+            when {
+                info.distance <= 100 -> 100
+                info.distance <= 300 -> 300
+                info.distance <= 500 -> 500
+                else -> 1000
+            }
         }
         handleAlert(
             info.phase,
@@ -368,8 +372,8 @@ class AlertPlayer(private val context: Context) {
             speedKmh,
             info.speedLimit,
             info.camType,
-            1100,
-            100,
+            info.d1,
+            info.d2,
             zoneTriggered = zone
         )
     }

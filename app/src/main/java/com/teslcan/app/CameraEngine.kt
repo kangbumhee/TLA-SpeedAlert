@@ -1,9 +1,13 @@
 package com.teslcan.app
 
+import android.location.Location
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
+import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
-import kotlin.math.pow
 import kotlin.math.sin
 import kotlin.math.sqrt
 
@@ -16,14 +20,18 @@ data class AlertInfo(
     val camLat: Double,
     val camLon: Double,
     val isSection: Boolean = false,
-    val sectionAvgSpeed: Int = 0
+    val sectionAvgSpeed: Int = 0,
+    /** 레거지 CamAlert: 1000/500/300/100 구간 중 이번 틱에 새로 진입한 구간(음성 1회). 0이면 없음 */
+    val zoneTriggered: Int = 0,
+    val rawDistance: Int = distance,
+    val d1: Int = 1100,
+    val d2: Int = 100
 ) {
-    /** UI·로그용 레거시 타입 */
     val camType: Int get() = safetyCode.toLegacyCamType()
 }
 
 /**
- * 카카오내비 안전운전(거리·우선순위) + SpeedAlert(단계·heading 스캔) 패턴을 단순화해 구현.
+ * CamAlert 루트(`app/`)와 동일한 패턴: Mapbox 도로거리 비율 + 베어링 + 구간(zone) 1회 안내.
  */
 class CameraEngine(
     private val cameraDb: CameraDatabase,
@@ -33,204 +41,515 @@ class CameraEngine(
     companion object {
         private const val TAG = "CameraEngine"
 
-        /** DB·지도 마커 조회 반경 */
-        const val SCAN_RADIUS = 1500.0
-        /** 음성·알림 카드에 쓸 최대 거리 (이 밖은 엔진이 무시) */
-        const val ALERT_RADIUS_M = 600.0
-        private const val ALERT_PHASE1 = 500.0
-        private const val ALERT_PHASE2 = 300.0
-        private const val ALERT_PHASE3 = 100.0
-        private const val LOST_DISTANCE = 50.0
+        private const val SCAN_RADIUS = 1500
+        private const val ALERT_DISTANCE = 1100
+        private const val LOST_DISTANCE = 1300
         private const val COOLDOWN_MS = 60_000L
-        /** 진행 방향 기준 전방 부채꼴 (±45°) */
-        private const val AHEAD_ANGLE_DEG = 45f
+        private const val PASS_DISTANCE = 50.0
+
+        private const val AHEAD_ANGLE = 40.0
+        private const val BEHIND_ANGLE = 110.0
+        private const val MIN_SPEED_FOR_BEARING = 5
+        private const val MIN_MOVE_FOR_BEARING = 5.0
+        private const val TRACKING_GRACE_MS = 8000L
+
+        private val ALERT_ZONES = intArrayOf(1000, 500, 300, 100)
+        private const val BEARING_HISTORY_SIZE = 5
+
+        private fun camTypePriority(legacyType: Int): Int = when (legacyType) {
+            6 -> 0
+            3 -> 1
+            0, 1 -> 2
+            4 -> 3
+            2 -> 4
+            5 -> 5
+            else -> 3
+        }
 
         fun idle(): AlertInfo =
             AlertInfo(0, 0, 0, SafetyCode.UNKNOWN, false, 0.0, 0.0)
     }
 
+    private val router = MapboxRouter()
+    private var cachedRoute: MapboxRouter.RouteResult? = null
+    private var routeRequestInProgress = false
+
     private var trackingCamera: CameraRecord? = null
-    private var lastEnginePhase = 0
-    private var lastDistance = 0.0
-    private var haveDistanceSample = false
-    private val passedCooldown = mutableMapOf<Long, Long>()
+    private var minDistReached = Double.MAX_VALUE
+    private var lastDist = Double.MAX_VALUE
+    private var approachCount = 0
+    private var recedeCount = 0
+    private var trackingStartMs = 0L
+    private val zoneFired = mutableSetOf<Int>()
+
+    private var prevLat = 0.0
+    private var prevLon = 0.0
+    private var currentBearing = -1.0
+    private var bearingValid = false
+    private val bearingHistory = mutableListOf<Double>()
+
+    private data class PassedCamera(val lat: Double, val lon: Double, val timeMs: Long)
+    private val passedCameras = mutableListOf<PassedCamera>()
 
     private var sectionEntry: CameraRecord? = null
     private var sectionEntryTime = 0L
     private var sectionDistance = 0.0
 
+    /** 시뮬 등에서만 사용. null이면 내부 베어링(이동 벡터) 사용. */
     var bearingOverrideDeg: Float? = null
-    private val bearingHistory = mutableListOf<Float>()
 
-    fun updateBearing(gpsDeg: Float) {
-        bearingHistory.add(gpsDeg)
-        if (bearingHistory.size > 5) bearingHistory.removeAt(0)
+    @Deprecated("레거지 엔진은 내부 베어링만 사용. 호출해도 무시됩니다.")
+    fun updateBearing(@Suppress("UNUSED_PARAMETER") gpsDeg: Float) {
     }
 
     fun reset() {
         resetTracking()
+        prevLat = 0.0
+        prevLon = 0.0
+        currentBearing = -1.0
+        bearingValid = false
         bearingHistory.clear()
+        passedCameras.clear()
         bearingOverrideDeg = null
-    }
-
-    private fun resetTracking() {
-        trackingCamera = null
-        lastEnginePhase = 0
-        lastDistance = 0.0
-        haveDistanceSample = false
         sectionEntry = null
         sectionEntryTime = 0L
         sectionDistance = 0.0
     }
 
-    private fun effectiveHeading(): Float? =
-        bearingOverrideDeg ?: bearingHistory.lastOrNull()
+    private fun resetTracking() {
+        trackingCamera = null
+        cachedRoute = null
+        routeRequestInProgress = false
+        minDistReached = Double.MAX_VALUE
+        lastDist = Double.MAX_VALUE
+        approachCount = 0
+        recedeCount = 0
+        trackingStartMs = 0L
+        zoneFired.clear()
+    }
 
-    /**
-     * @param bearingOverrideDeg 시뮬 등에서 주행 방향(도). null이면 GPS bearingHistory 사용.
-     */
     fun check(
         lat: Double,
         lon: Double,
         speedKmh: Int,
         overThreshold: Int,
         bearingOverrideDeg: Double? = null
-    ): AlertInfo {
-        if (bearingOverrideDeg != null && bearingOverrideDeg >= 0) {
-            this.bearingOverrideDeg = bearingOverrideDeg.toFloat()
+    ): AlertInfo? = update(lat, lon, speedKmh, overThreshold, bearingOverrideDeg)
+
+    private fun update(
+        lat: Double,
+        lon: Double,
+        speedKmh: Int,
+        overThreshold: Int,
+        bearingOverrideDeg: Double?
+    ): AlertInfo? {
+        updateBearingInternal(lat, lon, speedKmh)
+        if (bearingOverrideDeg != null && bearingOverrideDeg >= 0.0) {
+            currentBearing = (bearingOverrideDeg + 360.0) % 360.0
+            bearingValid = true
+            bearingHistory.clear()
+            bearingHistory.add(currentBearing)
         }
 
         val now = System.currentTimeMillis()
-        passedCooldown.entries.removeAll { now - it.value > COOLDOWN_MS }
+        passedCameras.removeAll { now - it.timeMs > COOLDOWN_MS }
 
-        val heading = effectiveHeading()
-        val raw = cameraDb.findNearbyCameras(
-            lat,
-            lon,
-            heading,
-            maxDistanceMeters = SCAN_RADIUS,
-            aheadAngle = if (heading != null) AHEAD_ANGLE_DEG else 360f
+        if (trackingCamera != null) {
+            return updateTracking(lat, lon, speedKmh, overThreshold, now)
+        }
+        if (routeRequestInProgress) return null
+        return findAheadCamera(lat, lon, speedKmh, overThreshold)
+    }
+
+    private fun updateBearingInternal(lat: Double, lon: Double, speedKmh: Int) {
+        if (prevLat != 0.0 && prevLon != 0.0 && speedKmh >= MIN_SPEED_FOR_BEARING) {
+            val moved = distanceBetween(prevLat, prevLon, lat, lon)
+            if (moved > MIN_MOVE_FOR_BEARING) {
+                val newBearing = bearingBetween(prevLat, prevLon, lat, lon)
+                bearingHistory.add(newBearing)
+                if (bearingHistory.size > BEARING_HISTORY_SIZE) bearingHistory.removeAt(0)
+                var sinSum = 0.0
+                var cosSum = 0.0
+                for (b in bearingHistory) {
+                    sinSum += sin(Math.toRadians(b))
+                    cosSum += cos(Math.toRadians(b))
+                }
+                currentBearing = (Math.toDegrees(atan2(sinSum, cosSum)) + 360.0) % 360.0
+                bearingValid = true
+            }
+        } else if (speedKmh < MIN_SPEED_FOR_BEARING) {
+            bearingHistory.clear()
+            bearingValid = false
+        }
+        prevLat = lat
+        prevLon = lon
+    }
+
+    private data class Candidate(val cam: CameraRecord, val dist: Double, val angleDiff: Double)
+
+    private fun findAheadCamera(lat: Double, lon: Double, speedKmh: Int, overThreshold: Int): AlertInfo? {
+        val allCameras = cameraDb.findNearbyCameras(
+            lat, lon,
+            headingDeg = null,
+            maxDistanceMeters = SCAN_RADIUS.toDouble(),
+            aheadAngle = 360f
         )
-        val cameras = raw
-            .filter { isSpeedAlertRelevant(it.safetyCode, it.speedLimit) }
-            .filter { DrivingProfile.isTypeEnabled(it.safetyCode.toLegacyCamType(), settings) }
-            .filter { it.id !in passedCooldown }
+        if (allCameras.isEmpty()) return null
+        if (routeRequestInProgress) return null
 
-        if (cameras.isEmpty()) {
-            resetTracking()
-            return idle()
-        }
+        val candidates = mutableListOf<Candidate>()
+        for (cam in allCameras) {
+            if (!isAlertTarget(cam.safetyCode, cam.speedLimit)) continue
+            if (!DrivingProfile.isTypeEnabled(cam.safetyCode.toLegacyCamType(), settings)) continue
+            if (cam.speedLimit <= 0 && cam.safetyCode != SafetyCode.SIGNAL) continue
+            if (isInCooldown(cam)) continue
 
-        val withDist = cameras.map { cam -> cam to haversine(lat, lon, cam.lat, cam.lon) }
-        val inAlertRadius = withDist.filter { (_, d) -> d <= ALERT_RADIUS_M }
-        if (inAlertRadius.isEmpty()) {
-            resetTracking()
-            return idle()
-        }
+            val dist = distanceBetween(lat, lon, cam.lat, cam.lon)
+            if (dist > ALERT_DISTANCE) continue
 
-        val (target, dist) = inAlertRadius.minWith(
-            compareBy<Pair<CameraRecord, Double>> { it.second }
-                .thenBy { it.first.safetyCode.priority }
-        )
+            val angleDiffVal: Double = if (bearingValid) {
+                val bearingToCam = bearingBetween(lat, lon, cam.lat, cam.lon)
+                val diff = angleDiff(currentBearing, bearingToCam)
+                if (diff > AHEAD_ANGLE) continue
 
-        if (trackingCamera != null && trackingCamera!!.id != target.id) {
-            resetTracking()
-        }
-        trackingCamera = target
-
-        if (haveDistanceSample && dist > lastDistance + LOST_DISTANCE) {
-            Log.d(TAG, "PASS id=${target.id} ${target.safetyCode.label}")
-            passedCooldown[target.id] = now
-            val passLimit = target.speedLimit
-            val passCode = target.safetyCode
-            val passLat = target.lat
-            val passLon = target.lon
-
-            if (target.safetyCode == SafetyCode.SECTION_OUT && sectionEntry != null) {
-                val elapsed = (now - sectionEntryTime) / 1000.0
-                val avgSpeed = if (elapsed > 0) (sectionDistance / elapsed * 3.6).toInt() else 0
-                resetTracking()
-                return AlertInfo(
-                    phase = 4,
-                    distance = 0,
-                    speedLimit = target.speedLimit,
-                    safetyCode = target.safetyCode,
-                    overspeed = avgSpeed > target.speedLimit + overThreshold,
-                    camLat = target.lat,
-                    camLon = target.lon,
-                    isSection = true,
-                    sectionAvgSpeed = avgSpeed
-                )
+                val headingInt = cam.direction?.toInt() ?: -1
+                if (headingInt >= 0) {
+                    val headingDiff = angleDiff(currentBearing, headingInt.toDouble())
+                    if (headingDiff > 60.0) {
+                        Log.d(
+                            TAG,
+                            "heading 필터: ${cam.safetyCode.label} limit=${cam.speedLimit} Δ=${"%.0f".format(headingDiff)}° → 스킵"
+                        )
+                        continue
+                    }
+                }
+                if (headingInt < 0 && dist > 200.0) continue
+                diff
+            } else {
+                val headingInt = cam.direction?.toInt() ?: -1
+                if (headingInt < 0 && dist > 200.0) continue
+                0.0
             }
 
-            resetTracking()
-            return AlertInfo(0, 0, passLimit, passCode, false, passLat, passLon)
+            candidates.add(Candidate(cam, dist, angleDiffVal))
         }
-        lastDistance = dist
-        haveDistanceSample = true
 
-        if (target.safetyCode == SafetyCode.SECTION_IN && sectionEntry == null && dist < ALERT_PHASE3) {
-            sectionEntry = target
+        if (bearingValid) {
+            Log.d(TAG, "검색: bearing=${"%.0f".format(Locale.US, currentBearing)}° raw=${allCameras.size}→후보 ${candidates.size}개")
+        } else {
+            Log.d(TAG, "검색: bearing=invalid →전방위 후보 ${candidates.size}개 (raw=${allCameras.size})")
+        }
+
+        if (candidates.isEmpty() && allCameras.isNotEmpty()) {
+            val sample = allCameras.first()
+            val d0 = distanceBetween(lat, lon, sample.lat, sample.lon)
+            Log.d(
+                TAG,
+                "  예시 탈락: ${sample.safetyCode.label} limit=${sample.speedLimit} dist=${"%.0f".format(d0)}m " +
+                    "alert=${isAlertTarget(sample.safetyCode, sample.speedLimit)} " +
+                    "typeOn=${DrivingProfile.isTypeEnabled(sample.safetyCode.toLegacyCamType(), settings)} " +
+                    "cool=${isInCooldown(sample)} bearing=$bearingValid"
+            )
+        }
+
+        if (candidates.isEmpty()) return null
+
+        val sorted = candidates.sortedWith(
+            compareBy<Candidate> { camTypePriority(it.cam.safetyCode.toLegacyCamType()) }
+                .thenBy { it.dist }
+                .thenBy { it.angleDiff }
+        )
+        val topCandidates = sorted.take(3)
+
+        routeRequestInProgress = true
+        val curLat = lat
+        val curLon = lon
+        val curSpeed = speedKmh
+        val curBearing = currentBearing
+        val curBearingValid = bearingValid
+
+        Thread {
+            var bestCam: CameraRecord? = null
+            var bestRoute: MapboxRouter.RouteResult? = null
+            var bestStraight = 0.0
+
+            for (candidate in topCandidates) {
+                val route = router.getRoute(curLat, curLon, candidate.cam.lat, candidate.cam.lon, candidate.dist)
+                if (route.success) {
+                    val ratio = if (candidate.dist > 0.0) route.roadDistance / candidate.dist else 0.0
+                    val maxRatio = when {
+                        curSpeed >= 80 -> 2.0
+                        curSpeed >= 40 -> 2.5
+                        else -> 3.0
+                    }
+                    Log.d(
+                        TAG,
+                        "검증: ${candidate.cam.safetyCode.label} 직선${candidate.dist.toInt()}m 도로${route.roadDistance.toInt()}m " +
+                            "${"%.1f".format(Locale.US, ratio)}x (기준${"%.1f".format(Locale.US, maxRatio)}x)"
+                    )
+
+                    if (ratio > maxRatio) {
+                        Log.d(TAG, "  → 비율 초과 스킵")
+                        continue
+                    }
+                    if (route.roadDistance > ALERT_DISTANCE * 1.5) {
+                        Log.d(TAG, "  → 도로거리 ${route.roadDistance.toInt()}m 스킵")
+                        continue
+                    }
+                    if (curBearingValid && route.routePoints.isNotEmpty()) {
+                        val aligned = router.isRouteAlignedWithBearing(route.routePoints, curBearing, 200.0)
+                        if (!aligned) {
+                            Log.d(TAG, "  → 방향 불일치 스킵")
+                            continue
+                        }
+                    }
+                    bestCam = candidate.cam
+                    bestRoute = route
+                    bestStraight = candidate.dist
+                    Log.d(TAG, "  ✓ 확정! ${route.roadDistance.toInt()}m")
+                    break
+                } else {
+                    Log.d(TAG, "  API 실패 → 스킵")
+                }
+            }
+
+            Handler(Looper.getMainLooper()).post {
+                routeRequestInProgress = false
+                if (bestCam != null && bestRoute != null) {
+                    trackingCamera = bestCam
+                    cachedRoute = bestRoute
+                    minDistReached = bestRoute.roadDistance
+                    lastDist = bestRoute.roadDistance
+                    approachCount = 0
+                    recedeCount = 0
+                    zoneFired.clear()
+                    trackingStartMs = System.currentTimeMillis()
+                    sectionEntry = null
+                    sectionEntryTime = 0L
+                    sectionDistance = 0.0
+                    Log.d(TAG, "추적시작: ${bestStraight.toInt()}m→${bestRoute.roadDistance.toInt()}m ${bestCam.safetyCode.label}")
+                } else {
+                    Log.d(TAG, "적합 카메라 없음 (${topCandidates.size}개 검토)")
+                }
+            }
+        }.start()
+
+        return null
+    }
+
+    private fun updateTracking(
+        lat: Double,
+        lon: Double,
+        speedKmh: Int,
+        overThreshold: Int,
+        now: Long
+    ): AlertInfo? {
+        val cam = trackingCamera ?: return null
+        val straightDist = distanceBetween(lat, lon, cam.lat, cam.lon)
+        val route = cachedRoute
+        val roadDist = if (route != null && route.routePoints.isNotEmpty()) {
+            val remaining = router.remainingDistance(lat, lon, route.routePoints)
+            if (remaining > 0.0) remaining else straightDist * 1.3
+        } else {
+            straightDist * 1.3
+        }
+
+        if (cam.safetyCode == SafetyCode.SECTION_IN && sectionEntry == null && roadDist < 100.0) {
+            sectionEntry = cam
             sectionEntryTime = now
             sectionDistance = 0.0
-            Log.d(TAG, "SECTION_IN limit=${target.speedLimit}")
+            Log.d(TAG, "SECTION_IN limit=${cam.speedLimit}")
         }
         if (sectionEntry != null) {
             sectionDistance += speedKmh / 3.6
         }
 
-        val onViolation = target.speedLimit > 0 && speedKmh > target.speedLimit + overThreshold
-        // 500m 밖~600m: 음성 없음(대시보드 phase -1). 500m 이내부터 기존 2/3/4 단계.
-        val phase = when {
-            dist <= ALERT_PHASE3 -> 4
-            dist <= ALERT_PHASE2 -> 3
-            dist <= ALERT_PHASE1 -> 2
-            else -> -1
+        if (roadDist < lastDist - 5.0) {
+            approachCount++
+            recedeCount = 0
+        } else if (roadDist > lastDist + 5.0) {
+            recedeCount++
+            approachCount = 0
         }
 
-        if (phase > lastEnginePhase) {
-            Log.d(TAG, "ALERT phase=$phase dist=${dist.toInt()}m ${target.safetyCode.label} limit=${target.speedLimit}")
-        }
-        lastEnginePhase = phase
+        if (roadDist < minDistReached) minDistReached = roadDist
+        lastDist = roadDist
+        val inGrace = (now - trackingStartMs) < TRACKING_GRACE_MS
 
-        val sectionAvg = if (sectionEntry != null && sectionEntryTime > 0L) {
+        if (!inGrace && minDistReached < PASS_DISTANCE && recedeCount >= 2 && roadDist > minDistReached + 10.0) {
+            Log.d(TAG, "[CAM] 빠른통과")
+            return onCameraPassed(cam, now, speedKmh, overThreshold)
+        }
+        if (straightDist < 30.0 && recedeCount >= 1) {
+            Log.d(TAG, "[CAM] 근접통과")
+            return onCameraPassed(cam, now, speedKmh, overThreshold)
+        }
+
+        if (bearingValid && minDistReached < 300.0) {
+            val bearingToCam = bearingBetween(lat, lon, cam.lat, cam.lon)
+            val diff = angleDiff(currentBearing, bearingToCam)
+            if (diff > BEHIND_ANGLE && straightDist > 30.0) {
+                Log.d(TAG, "[CAM] 통과(heading)")
+                return onCameraPassed(cam, now, speedKmh, overThreshold)
+            }
+        }
+
+        if (!inGrace && minDistReached < 100.0 && recedeCount >= 3 && roadDist > minDistReached + 40.0) {
+            Log.d(TAG, "[CAM] 통과(recede)")
+            return onCameraPassed(cam, now, speedKmh, overThreshold)
+        }
+        if (!inGrace && minDistReached < PASS_DISTANCE && roadDist > minDistReached + 20.0) {
+            Log.d(TAG, "[CAM] 통과(close)")
+            return onCameraPassed(cam, now, speedKmh, overThreshold)
+        }
+
+        if (!inGrace && route != null && route.routePoints.isNotEmpty() &&
+            !router.isOnRoute(lat, lon, route.routePoints)
+        ) {
+            Log.d(TAG, "[CAM] 경로이탈 해제")
+            resetTracking()
+            return idle()
+        }
+
+        if (!inGrace && approachCount == 0 && recedeCount >= 8) {
+            Log.d(TAG, "[CAM] 해제(미접근)")
+            resetTracking()
+            return idle()
+        }
+        if (!inGrace && bearingValid && recedeCount >= 5) {
+            val bearingToCam = bearingBetween(lat, lon, cam.lat, cam.lon)
+            val diff = angleDiff(currentBearing, bearingToCam)
+            if (diff > 90.0) {
+                Log.d(TAG, "[CAM] 해제(뒤)")
+                resetTracking()
+                return idle()
+            }
+        }
+        if (straightDist > LOST_DISTANCE) {
+            Log.d(TAG, "[CAM] 해제(거리초과)")
+            resetTracking()
+            return idle()
+        }
+
+        return buildAlert(roadDist, straightDist.toInt(), cam, speedKmh, overThreshold, now)
+    }
+
+    private fun onCameraPassed(cam: CameraRecord, now: Long, speedKmh: Int, overThreshold: Int): AlertInfo {
+        passedCameras.add(PassedCamera(cam.lat, cam.lon, now))
+
+        if (cam.safetyCode == SafetyCode.SECTION_OUT && sectionEntry != null) {
             val elapsed = (now - sectionEntryTime) / 1000.0
+            val avgSpeed = if (elapsed > 0) (sectionDistance / elapsed * 3.6).toInt() else 0
+            val result = AlertInfo(
+                phase = 4,
+                distance = 0,
+                speedLimit = cam.speedLimit,
+                safetyCode = cam.safetyCode,
+                overspeed = avgSpeed > cam.speedLimit + overThreshold,
+                camLat = cam.lat,
+                camLon = cam.lon,
+                isSection = true,
+                sectionAvgSpeed = avgSpeed,
+                zoneTriggered = 0,
+                rawDistance = 0
+            )
+            resetTracking()
+            return result
+        }
+
+        val result = AlertInfo(
+            phase = 0,
+            distance = 0,
+            speedLimit = cam.speedLimit,
+            safetyCode = cam.safetyCode,
+            overspeed = false,
+            camLat = cam.lat,
+            camLon = cam.lon,
+            zoneTriggered = 0,
+            rawDistance = 0
+        )
+        resetTracking()
+        return result
+    }
+
+    private fun buildAlert(
+        roadDist: Double,
+        rawDist: Int,
+        cam: CameraRecord,
+        speedKmh: Int,
+        overThreshold: Int,
+        @Suppress("UNUSED_PARAMETER") now: Long
+    ): AlertInfo {
+        val roadDistInt = roadDist.toInt()
+        val roundedDist = ((roadDistInt + 50) / 100) * 100
+        val phase = when {
+            roadDistInt <= 100 -> 4
+            roadDistInt <= 300 -> 3
+            roadDistInt <= 500 -> 2
+            roadDistInt <= 1000 -> 1
+            roadDistInt <= ALERT_DISTANCE -> -1
+            else -> 0
+        }
+        val onViolation = cam.speedLimit > 0 && speedKmh > cam.speedLimit + overThreshold
+        var zoneTriggered = 0
+        for (zone in ALERT_ZONES) {
+            if (roadDistInt <= zone && zone !in zoneFired) {
+                zoneFired.add(zone)
+                zoneTriggered = zone
+                break
+            }
+        }
+        val sectionAvg = if (sectionEntry != null && sectionEntryTime > 0L) {
+            val elapsed = (System.currentTimeMillis() - sectionEntryTime) / 1000.0
             if (elapsed > 0) (sectionDistance / elapsed * 3.6).toInt() else 0
         } else {
             0
         }
-
         return AlertInfo(
             phase = phase,
-            distance = dist.toInt(),
-            speedLimit = target.speedLimit,
-            safetyCode = target.safetyCode,
+            distance = roundedDist,
+            speedLimit = cam.speedLimit,
+            safetyCode = cam.safetyCode,
             overspeed = onViolation,
-            camLat = target.lat,
-            camLon = target.lon,
+            camLat = cam.lat,
+            camLon = cam.lon,
             isSection = sectionEntry != null,
-            sectionAvgSpeed = sectionAvg
+            sectionAvgSpeed = sectionAvg,
+            zoneTriggered = zoneTriggered,
+            rawDistance = rawDist.coerceAtLeast(0)
         )
     }
 
-    private fun haversine(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
-        val r = 6371000.0
-        val dLat = Math.toRadians(lat2 - lat1)
+    private fun isInCooldown(cam: CameraRecord): Boolean =
+        passedCameras.any { distanceBetween(it.lat, it.lon, cam.lat, cam.lon) < 50.0 }
+
+    private fun distanceBetween(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+        val results = FloatArray(1)
+        Location.distanceBetween(lat1, lon1, lat2, lon2, results)
+        return results[0].toDouble()
+    }
+
+    private fun bearingBetween(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
         val dLon = Math.toRadians(lon2 - lon1)
-        val a = sin(dLat / 2).pow(2) +
-            cos(Math.toRadians(lat1)) * cos(Math.toRadians(lat2)) * sin(dLon / 2).pow(2)
-        return r * 2 * atan2(sqrt(a), sqrt(1 - a))
+        val la1 = Math.toRadians(lat1)
+        val la2 = Math.toRadians(lat2)
+        val y = sin(dLon) * cos(la2)
+        val x = cos(la1) * sin(la2) - sin(la1) * cos(la2) * cos(dLon)
+        return (Math.toDegrees(atan2(y, x)) + 360.0) % 360.0
+    }
+
+    private fun angleDiff(a: Double, b: Double): Double {
+        val diff = abs(a - b) % 360.0
+        return if (diff > 180.0) 360.0 - diff else diff
     }
 }
 
-/**
- * 과속·구간·보호구역(제한속도 있음) 등 SpeedAlert 대상.
- * 주정차·신호만·버스전용·통행위반 등은 제외.
- */
-private fun isSpeedAlertRelevant(code: SafetyCode, speedLimit: Int): Boolean = when (code) {
+/** 과속·구간·보호구역·신호위반(단속) 등 알림 대상. 레거시 CSV type=4 → SIGNAL. */
+private fun isAlertTarget(code: SafetyCode, speedLimit: Int): Boolean = when (code) {
     SafetyCode.FIXED_SPEED,
     SafetyCode.MOVABLE_SPEED,
     SafetyCode.SIGNAL_AND_SPEED,
+    SafetyCode.SIGNAL,
     SafetyCode.SECTION_IN,
     SafetyCode.SECTION_OUT,
     SafetyCode.SECTION_ZONE,

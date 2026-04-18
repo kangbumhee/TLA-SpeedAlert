@@ -15,19 +15,38 @@ class RouteSimulator {
 
     companion object {
         private const val TAG = "RouteSim"
-        private const val UPDATE_INTERVAL_MS = 1000L
         private const val SCENARIO_TICK_SEC = 1.0
 
         fun scenarioDisplayName(preset: String): String = when (preset) {
             "scenario_basic" -> "기본 주행 (실도로)"
             "scenario_dense", "camera_dense" -> "카메라 밀집 (실도로)"
             "scenario_highway" -> "고속 구간 (실도로)"
+            "scenario_janggi_gochon" -> "장기동→고촌IC (김포)"
             "gangnam_jamsil" -> "강남→잠실 (OSRM)"
             "seocho_yangjae" -> "서초→양재 (OSRM)"
             "yeongdeungpo_yeouido" -> "영등포→여의도 (OSRM)"
             "jongro_dongdaemun" -> "종로→동대문 (OSRM)"
             else -> preset
         }
+
+        /** 설정·디버그용: 스피너/버튼 인덱스 → 프리셋 id */
+        fun scenarioPresetAt(index: Int): String? = when (index) {
+            0 -> "scenario_basic"
+            1 -> "scenario_dense"
+            2 -> "scenario_highway"
+            3 -> "scenario_janggi_gochon"
+            else -> null
+        }
+
+        fun scenarioNameAt(index: Int): String =
+            scenarioPresetAt(index)?.let { scenarioDisplayName(it) } ?: "알 수 없음"
+
+        fun allEmbeddedPresetIds(): List<String> = listOf(
+            "scenario_basic",
+            "scenario_dense",
+            "scenario_highway",
+            "scenario_janggi_gochon"
+        )
     }
 
     data class SimPoint(val lat: Double, val lon: Double, val bearing: Double, val speedKmh: Int)
@@ -40,7 +59,25 @@ class RouteSimulator {
     var onLocationUpdate: ((lat: Double, lon: Double, speedKmh: Int, sats: Int, fix: Boolean, bearingDeg: Double) -> Unit)? = null
     var onSimulationEnd: (() -> Unit)? = null
     var onRouteReady: ((pointCount: Int, distanceKm: Double) -> Unit)? = null
-    var speedMultiplier = 1.0
+
+    /**
+     * 재생 속도 배율 (틱 간격만 조절, 웨이포인트 표기 속도는 그대로).
+     * 1.0 = 1초마다 한 포인트, 2.0 = 약 0.5초마다.
+     */
+    var speedMultiplier: Double = 1.0
+        set(value) {
+            field = value.coerceIn(0.25, 5.0)
+        }
+
+    fun getTickIntervalMs(): Long =
+        (1000.0 / speedMultiplier).toLong().coerceIn(100L, 4000L)
+
+    /** 시뮬 중 배율 변경 시 다음 틱 스케줄을 즉시 반영 */
+    fun notifyTickIntervalChanged() {
+        if (!isRunning) return
+        handler.removeCallbacks(tickRunnable)
+        handler.post(tickRunnable)
+    }
 
     fun startRoute(startLat: Double, startLon: Double, endLat: Double, endLon: Double, speedKmh: Int = 60) {
         stop()
@@ -94,6 +131,8 @@ class RouteSimulator {
             "scenario_dense", "camera_dense" ->
                 startEmbeddedScenario(ScenarioWaypoints.DENSE, speedKmh, "scenario_dense")
             "scenario_highway" -> startEmbeddedScenario(ScenarioWaypoints.HIGHWAY, speedKmh, "scenario_highway")
+            "scenario_janggi_gochon" ->
+                startEmbeddedScenario(ScenarioWaypoints.JANGGI_GOCHON, speedKmh, "scenario_janggi_gochon")
             "gangnam_jamsil" -> startRoute(37.497952, 127.027619, 37.513950, 127.102102, speedKmh)
             "seocho_yangjae" -> startRoute(37.491912, 127.007578, 37.484100, 127.034000, speedKmh)
             "yeongdeungpo_yeouido" -> startRoute(37.515836, 126.907299, 37.521600, 126.924300, speedKmh)
@@ -191,8 +230,7 @@ class RouteSimulator {
             val p = routePoints[currentIndex]
             onLocationUpdate?.invoke(p.lat, p.lon, p.speedKmh, 12, true, p.bearing)
             currentIndex++
-            val interval = (UPDATE_INTERVAL_MS / speedMultiplier).toLong().coerceAtLeast(100L)
-            handler.postDelayed(this, interval)
+            handler.postDelayed(this, getTickIntervalMs())
         }
     }
 

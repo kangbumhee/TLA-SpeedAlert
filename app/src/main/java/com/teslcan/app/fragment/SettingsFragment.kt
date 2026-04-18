@@ -193,7 +193,13 @@ class SettingsFragment : Fragment() {
         val btnSimGangnam = v.findViewById<Button>(R.id.btnSimGangnam)
         val btnSimSeocho = v.findViewById<Button>(R.id.btnSimSeocho)
         val btnSimCamera = v.findViewById<Button>(R.id.btnSimCamera)
+        val btnSimGimpo = v.findViewById<Button>(R.id.btnSimGimpo)
         val btnSimStop = v.findViewById<Button>(R.id.btnSimStop)
+        val btnSimSp05 = v.findViewById<Button>(R.id.btnSimSp05)
+        val btnSimSp1 = v.findViewById<Button>(R.id.btnSimSp1)
+        val btnSimSp2 = v.findViewById<Button>(R.id.btnSimSp2)
+        val btnSimSp3 = v.findViewById<Button>(R.id.btnSimSp3)
+        val tvSimSpeedMult = v.findViewById<TextView>(R.id.tvSimSpeedMult)
         val spinnerSimSpeed = v.findViewById<Spinner>(R.id.spinnerSimSpeed)
         val tvSimStatus = v.findViewById<TextView>(R.id.tvSimStatus)
 
@@ -204,6 +210,16 @@ class SettingsFragment : Fragment() {
             return if (idx in speeds.indices) speeds[idx] else 60
         }
 
+        fun refreshSimSpeedLabel() {
+            val act = activity as? MainActivity ?: return
+            act.bleService?.routeSimulator?.let { rs ->
+                tvSimSpeedMult.text =
+                    "재생: %.2fx (틱 %dms)".format(rs.speedMultiplier, rs.getTickIntervalMs())
+            } ?: run {
+                tvSimSpeedMult.text = "재생: 1.00x (틱 1000ms)"
+            }
+        }
+
         fun launchSim(preset: String) {
             val act = activity as? MainActivity ?: return
             act.whenServiceReady { svc ->
@@ -211,7 +227,10 @@ class SettingsFragment : Fragment() {
                 svc.startSimulation(preset, speed)
                 btnSimStop.isEnabled = true
                 val label = RouteSimulator.scenarioDisplayName(preset)
-                tvSimStatus.text = "시뮬 진행: $label (${speed} km/h)"
+                val mult = svc.routeSimulator?.speedMultiplier ?: 1.0
+                val tick = svc.routeSimulator?.getTickIntervalMs() ?: 1000L
+                tvSimStatus.text = "시뮬 진행: $label (${speed} km/h, ${"%.1f".format(mult)}x / 틱${tick}ms)"
+                refreshSimSpeedLabel()
                 svc.routeSimulator?.onSimulationEnd = {
                     activity?.runOnUiThread {
                         btnSimStop.isEnabled = false
@@ -221,9 +240,23 @@ class SettingsFragment : Fragment() {
             }
         }
 
+        fun applySpeedMult(mult: Double) {
+            val act = activity as? MainActivity ?: return
+            act.whenServiceReady { svc ->
+                svc.setSimulationSpeedMultiplier(mult)
+                refreshSimSpeedLabel()
+            }
+        }
+
         btnSimGangnam.setOnClickListener { launchSim("scenario_basic") }
         btnSimSeocho.setOnClickListener { launchSim("scenario_highway") }
         btnSimCamera.setOnClickListener { launchSim("scenario_dense") }
+        btnSimGimpo.setOnClickListener { launchSim("scenario_janggi_gochon") }
+        btnSimSp05.setOnClickListener { applySpeedMult(0.5) }
+        btnSimSp1.setOnClickListener { applySpeedMult(1.0) }
+        btnSimSp2.setOnClickListener { applySpeedMult(2.0) }
+        btnSimSp3.setOnClickListener { applySpeedMult(3.0) }
+        refreshSimSpeedLabel()
         btnSimStop.setOnClickListener {
             (activity as? MainActivity)?.whenServiceReady { svc ->
                 svc.stopSimulation()

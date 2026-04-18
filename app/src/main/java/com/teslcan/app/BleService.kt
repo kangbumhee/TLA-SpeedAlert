@@ -26,10 +26,6 @@ import android.os.Looper
 import android.os.ParcelUuid
 import android.util.Log
 import androidx.core.app.NotificationCompat
-import kotlin.math.atan2
-import kotlin.math.cos
-import kotlin.math.sin
-import kotlin.math.sqrt
 import java.util.UUID
 
 class BleService : Service() {
@@ -39,10 +35,6 @@ class BleService : Service() {
         private const val CHANNEL_ID = "camalert_channel"
         private const val NOTIFICATION_ID = 1
         private const val TARGET_DEVICE_NAME = "TeslaCAN"
-        /** BLE GPS로 진행 방위 추정 시 최소 이동 거리(m) */
-        private const val MIN_HEADING_MOVE_M = 5.0
-        /** 진행 방위 반영 최소 차속(km/h) */
-        private const val MIN_HEADING_SPEED_KMH = 3
         val SERVICE_UUID: UUID = UUID.fromString("0000ff01-0000-1000-8000-00805f9b34fb")
         val CHAR_SPEED_UUID: UUID = UUID.fromString("0000ff03-0000-1000-8000-00805f9b34fb")
         val CHAR_GPS_UUID: UUID = UUID.fromString("0000ff04-0000-1000-8000-00805f9b34fb")
@@ -255,6 +247,14 @@ class BleService : Service() {
         startScan()
     }
 
+    /** 시뮬 재생 속도(틱 간격). 시뮬 중에도 즉시 반영. */
+    fun setSimulationSpeedMultiplier(mult: Double) {
+        routeSimulator?.let { rs ->
+            rs.speedMultiplier = mult
+            if (isSimulationMode) rs.notifyTickIntervalChanged()
+        }
+    }
+
     /** 설정 화면에서 DB 갱신 후 카메라 개수 UI 동기화용 */
     fun refreshCameraCount() {
         handler.post {
@@ -373,33 +373,10 @@ class BleService : Service() {
         handler.post { onSpeedUpdate?.invoke(currentSpeed) }
     }
 
-    /** BLE 연속 좌표로 진행 방위를 넣어 DB 전방(±45°) 필터가 동작하도록 함 */
+    /** 직전 GPS fix (엔진 내부 베어링용으로는 미사용, 시뮬/디버그 참고용으로 유지) */
     private fun feedCourseBearingFromBleGps() {
-        val pl = lastCourseLat
-        val po = lastCourseLon
-        if (pl != null && po != null) {
-            val moved = flatMeters(pl, po, currentLat, currentLon)
-            if (moved >= MIN_HEADING_MOVE_M && currentSpeed >= MIN_HEADING_SPEED_KMH) {
-                cameraEngine.updateBearing(courseBearingDeg(pl, po, currentLat, currentLon))
-            }
-        }
         lastCourseLat = currentLat
         lastCourseLon = currentLon
-    }
-
-    private fun flatMeters(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
-        val dLat = (lat2 - lat1) * 111320.0
-        val dLon = (lon2 - lon1) * 111320.0 * cos(Math.toRadians(lat1))
-        return sqrt(dLat * dLat + dLon * dLon)
-    }
-
-    private fun courseBearingDeg(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Float {
-        val dLon = Math.toRadians(lon2 - lon1)
-        val la1 = Math.toRadians(lat1)
-        val la2 = Math.toRadians(lat2)
-        val y = sin(dLon) * cos(la2)
-        val x = cos(la1) * sin(la2) - sin(la1) * cos(la2) * cos(dLon)
-        return ((Math.toDegrees(atan2(y, x)) + 360.0) % 360.0).toFloat()
     }
 
     private fun onGps(data: ByteArray) {
@@ -460,7 +437,7 @@ class BleService : Service() {
             currentSpeed,
             settings.overSpeedThreshold,
             bearingOverride
-        )
+        ) ?: return
 
         handler.post {
             onAlertUpdate?.invoke(r)
@@ -507,9 +484,14 @@ class BleService : Service() {
                 overspeedLogActive = false
             }
 
+            // 1000~1100m: 대시보드·지도만, 구간 음성(handleSafetyAlert) 생략
+            if (r.phase == -1) {
+                return@post
+            }
+
             if (r.phase >= 1) {
                 alertPlayer.handleSafetyAlert(r, currentSpeed)
-                if (r.phase in 2..4) {
+                if (r.zoneTriggered > 0) {
                     eventLog.add(
                         LogEvent(
                             System.currentTimeMillis(),
