@@ -66,6 +66,12 @@ class CameraEngine(
         private const val ROUTE_MAX_TURN_FOR_STRAIGHT_DEG = 50.0
         private const val MIN_ROUTE_SEGMENT_FOR_TURN_M = 10.0
 
+        /** Overpass way 검색 반경(카메라 기준, m) */
+        private const val OVERPASS_WAY_QUERY_RADIUS_M = 35
+        /** 이 개수 이상이면 교차로로 보고 heading 미상 카메라 각도 제한 */
+        private const val INTERSECTION_MIN_WAYS_FOR_STRICT = 3
+        private const val INTERSECTION_UNKNOWN_HEADING_MAX_DEG = 30.0
+
         /** 라우팅 API 실패 시 직선 fallback — 매우 보수적(평행도로 오탐 방지) */
         private const val FALLBACK_MAX_STRAIGHT_M = 300.0
         private const val FALLBACK_MAX_ANGLE_DEG = 25.0
@@ -438,8 +444,9 @@ class CameraEngine(
 
         if (candidates.isEmpty()) return null
 
+        // 먼 카메라부터 OSRM 검증 → 코앞에서야 확정되는 현상 완화
         val sorted = candidates.sortedWith(
-            compareBy<Candidate> { it.dist }
+            compareByDescending<Candidate> { it.dist }
                 .thenBy { camTypePriority(it.cam.safetyCode.toLegacyCamType()) }
                 .thenBy { it.angleDiff }
         )
@@ -552,6 +559,52 @@ class CameraEngine(
                                     "${ROUTE_MAX_TURN_FOR_STRAIGHT_DEG.toInt()}° 스킵 (교차로 카메라)"
                             )
                             continue
+                        }
+                    }
+                    if (curBearingValid) {
+                        val camHid = candidate.cam.direction?.toInt() ?: -1
+                        val ways = OverpassService.queryWaysNearCameraBlocking(
+                            candidate.cam.lat,
+                            candidate.cam.lon,
+                            OVERPASS_WAY_QUERY_RADIUS_M
+                        )
+                        val isOpp = if (ways.isNotEmpty()) {
+                            OverpassService.isOppositeLaneFromWays(
+                                vehicleBearingDeg = curBearing,
+                                camHeading = camHid,
+                                ways = ways
+                            )
+                        } else {
+                            Log.d(TAG, "  Overpass way 없음 → OSRM nearest 반대차선 폴백")
+                            RouteService.isOppositeLaneCamera(
+                                curLat, curLon, curBearing,
+                                candidate.cam.lat, candidate.cam.lon, 30
+                            )
+                        }
+                        if (isOpp) {
+                            Log.d(
+                                TAG,
+                                "  반대차선 스킵 camId=${candidate.cam.id} bearing=${
+                                    "%.0f".format(Locale.US, curBearing)
+                                }° heading=$camHid"
+                            )
+                            continue
+                        }
+                        if (ways.size >= INTERSECTION_MIN_WAYS_FOR_STRICT && camHid < 0) {
+                            val bearingToCam = bearingBetween(
+                                curLat, curLon,
+                                candidate.cam.lat, candidate.cam.lon
+                            )
+                            val ad = angleDiff(curBearing, bearingToCam)
+                            if (ad > INTERSECTION_UNKNOWN_HEADING_MAX_DEG) {
+                                Log.d(
+                                    TAG,
+                                    "  교차로 미확인 카메라 스킵 ways=${ways.size} angleDiff=${
+                                        "%.0f".format(Locale.US, ad)
+                                    }°"
+                                )
+                                continue
+                            }
                         }
                     }
                     bestCam = candidate.cam
