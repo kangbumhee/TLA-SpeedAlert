@@ -55,6 +55,9 @@ class CameraEngine(
         private const val AHEAD_ANGLE = 40.0
         /** 차량→카메라 방위가 진행 방향과 이 각도(°) 이내면 전방(측면·반대차선 억제 강화) */
         private const val FORWARD_TO_CAM_DEG = 25.0
+        /** heading 미상(-1)이고 카메라가 100m 너머면 교차로 오탐 억제를 위해 더 엄격 */
+        private const val FORWARD_TO_CAM_UNKNOWN_HEADING_DEG = 15.0
+        private const val FORWARD_UNKNOWN_HEADING_DIST_M = 100.0
         /** OSRM 도착 접근 방향: 카메라 직전 50m 이상 구간으로 베어링 계산 */
         private const val APPROACH_LOOKBACK_M = 50.0
         /** 도착 접근 방향 vs 차량 bearing 최대 허용 편차(교차로 우회·수직 도로 단속 억제) */
@@ -377,7 +380,13 @@ class CameraEngine(
 
             if (bearingValid) {
                 val diffToCam = angleDiff(currentBearing, bearingToCam)
-                if (diffToCam > FORWARD_TO_CAM_DEG) continue
+                val effectiveForwardDeg =
+                    if (camHeading < 0 && dist > FORWARD_UNKNOWN_HEADING_DIST_M) {
+                        FORWARD_TO_CAM_UNKNOWN_HEADING_DEG
+                    } else {
+                        FORWARD_TO_CAM_DEG
+                    }
+                if (diffToCam > effectiveForwardDeg) continue
 
                 if (camHeading >= 0) {
                     val headingDiff = angleDiff(currentBearing, camHeading.toDouble())
@@ -542,14 +551,20 @@ class CameraEngine(
                         }
                     }
                     val camHid = candidate.cam.direction?.toInt() ?: -1
-                    if (camHid < 0 && curBearingValid &&
-                        RouteService.isOppositeLaneCamera(
+                    if (camHid < 0 && curBearingValid) {
+                        val isOpp = RouteService.isOppositeLaneCamera(
                             curLat, curLon, curBearing,
                             candidate.cam.lat, candidate.cam.lon, 30
                         )
-                    ) {
-                        Log.d(TAG, "  → 반대차선 판정(nearest) 스킵: ${candidate.cam.safetyCode.label}")
-                        continue
+                        Log.d(
+                            TAG,
+                            "  반대차선 검사: isOpp=$isOpp bearing=${"%.0f".format(Locale.US, curBearing)}° " +
+                                "${candidate.cam.safetyCode.label} dist=${candidate.dist.toInt()}m"
+                        )
+                        if (isOpp) {
+                            Log.d(TAG, "  → 반대차선 판정(nearest) 스킵: ${candidate.cam.safetyCode.label}")
+                            continue
+                        }
                     }
                     bestCam = candidate.cam
                     bestRoute = route

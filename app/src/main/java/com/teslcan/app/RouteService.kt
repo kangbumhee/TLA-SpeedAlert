@@ -21,6 +21,9 @@ object RouteService {
 
     data class LatLon(val lat: Double, val lon: Double)
 
+    /** OSRM nearest 첫 waypoint: 스냅 좌표 + 도로명(있으면) */
+    data class NearestSnapWithName(val lat: Double, val lon: Double, val name: String?)
+
     data class RouteResult(
         val roadDistance: Double,
         val straightDistance: Double,
@@ -103,8 +106,26 @@ object RouteService {
         return LatLon(lat = loc.getDouble(1), lon = loc.getDouble(0))
     }
 
+    private fun nearestSnapWithName(
+        lat: Double,
+        lon: Double,
+        bearingDeg: Double,
+        spreadDeg: Int
+    ): NearestSnapWithName? {
+        val obj = nearestHttpJson(lat, lon, bearingDeg, spreadDeg) ?: return null
+        if (obj.optString("code", "") != "Ok") return null
+        val wps = obj.optJSONArray("waypoints") ?: return null
+        if (wps.length() == 0) return null
+        val wp = wps.getJSONObject(0)
+        val loc = wp.optJSONArray("location") ?: return null
+        if (loc.length() < 2) return null
+        val rawName = wp.optString("name", "").trim()
+        val name = rawName.ifEmpty { null }
+        return NearestSnapWithName(lat = loc.getDouble(1), lon = loc.getDouble(0), name = name)
+    }
+
     /**
-     * 진행 방향 스냅과 반대 방향 스냅 중, 카메라가 반대 차선 쪽 스냅에 더 가깝다고 판단되면 true.
+     * 진행 방향 스냅과 반대 방향 스냅 비교. 교차로에서 same/opp 거리가 비슷하면 반대차선으로 간주.
      * Mapbox·nearest 불가 시 false(필터 생략).
      */
     fun isOppositeLaneCamera(
@@ -119,12 +140,34 @@ object RouteService {
         if (buildOsrmNearestServiceBase() == null) return false
         val mySnap = nearestSnapLocation(myLat, myLon, myBearingDeg, spreadDeg) ?: return false
         if (fastDist(myLat, myLon, mySnap.lat, mySnap.lon) > 80.0) return false
-        val camSame = nearestSnapLocation(camLat, camLon, myBearingDeg, spreadDeg) ?: return false
+
+        val camSame = nearestSnapWithName(camLat, camLon, myBearingDeg, spreadDeg)
         val opp = (myBearingDeg + 180.0) % 360.0
-        val camOpp = nearestSnapLocation(camLat, camLon, opp, spreadDeg) ?: return false
-        val distSame = fastDist(camLat, camLon, camSame.lat, camSame.lon)
-        val distOpp = fastDist(camLat, camLon, camOpp.lat, camOpp.lon)
-        return distOpp + 1.0 < distSame
+        val camOpp = nearestSnapWithName(camLat, camLon, opp, spreadDeg)
+
+        if (camSame != null && camOpp != null) {
+            val distSame = fastDist(camLat, camLon, camSame.lat, camSame.lon)
+            val distOpp = fastDist(camLat, camLon, camOpp.lat, camOpp.lon)
+            if (distSame < 3.0 && distOpp < 3.0) {
+                Log.d(
+                    TAG,
+                    "nearest 스냅 차이 미미(same=${distSame.toInt()}m opp=${distOpp.toInt()}m) → 반대차선 판정"
+                )
+                return true
+            }
+            val nSame = camSame.name?.trim().orEmpty()
+            val nOpp = camOpp.name?.trim().orEmpty()
+            if (nSame.isNotEmpty() && nOpp.isNotEmpty() && !nSame.equals(nOpp, ignoreCase = true)) {
+                Log.d(TAG, "nearest 도로명 불일치 same=\"$nSame\" opp=\"$nOpp\" → 반대차선 판정")
+                return true
+            }
+            return distOpp + 1.0 < distSame
+        }
+        if (camSame == null && camOpp != null) {
+            Log.d(TAG, "nearest: 진행방향 스냅 실패·반대만 성공 → 반대차선 판정")
+            return true
+        }
+        return false
     }
 
     /**
