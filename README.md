@@ -7,26 +7,12 @@
 `app/src/main/assets/cameras.csv` — 저장소에 포함하지 않습니다.  
 [data.go.kr](https://www.data.go.kr) 등에서 받은 표준 CSV를 위 경로에 두면 빌드·실행 시 자산에서 임포트됩니다.
 
-## GitHub 새 저장소에 올리기
+## GitHub 저장소
 
-1. GitHub에서 **이름: `TLA-SpeedAlert`** 인 빈 저장소를 만듭니다 (README 추가 안 함 권장).
-2. 이 폴더에서:
+**https://github.com/kangbumhee/TLA-SpeedAlert**
 
-```bash
-cd TLA-SpeedAlert
-git remote add origin https://github.com/YOUR_USERNAME/TLA-SpeedAlert.git
-git branch -M main
-git push -u origin main
-```
-
-GitHub CLI가 있으면:
-
-```bash
-cd TLA-SpeedAlert
-gh repo create TLA-SpeedAlert --public --source=. --remote=origin --push
-```
-
-`YOUR_USERNAME` 은 본인 계정으로 바꿉니다.
+이미 `origin` 이 연결되어 있으면 이후 푸시는 `git push` 만 하면 됩니다.  
+다른 계정으로 옮기려면 `git remote set-url origin …` 으로 URL을 바꿉니다.
 
 ## 빌드
 
