@@ -87,6 +87,9 @@ object RouteService {
         }
     }
 
+    private fun urlForLog(urlStr: String): String =
+        urlStr.replace(Regex("access_token=[^&]+"), "access_token=***").take(120)
+
     private fun executeRequest(urlStr: String, straightDist: Double): RouteResult {
         return try {
             val conn = URL(urlStr).openConnection() as HttpURLConnection
@@ -97,7 +100,13 @@ object RouteService {
 
             val code = conn.responseCode
             if (code != 200) {
-                Log.w(TAG, "HTTP $code")
+                val errBody = try {
+                    conn.errorStream?.bufferedReader()?.use { it.readText() }?.take(200)
+                } catch (_: Exception) {
+                    null
+                }
+                Log.w(TAG, "HTTP $code${errBody?.let { ": $it" } ?: ""}")
+                Log.w(TAG, "  URL: ${urlForLog(urlStr)}")
                 conn.disconnect()
                 return fallback(straightDist)
             }
@@ -109,6 +118,7 @@ object RouteService {
             val resultCode = obj.optString("code", "")
             if (resultCode.isNotEmpty() && resultCode != "Ok") {
                 Log.w(TAG, "Directions code=$resultCode")
+                Log.w(TAG, "  URL: ${urlForLog(urlStr)}")
                 return fallback(straightDist)
             }
 
@@ -134,7 +144,8 @@ object RouteService {
             )
             RouteResult(roadDist, straightDist, points, success = true)
         } catch (e: Exception) {
-            Log.w(TAG, "요청 실패: ${e.message}")
+            Log.w(TAG, "요청 실패: ${e.javaClass.simpleName}: ${e.message}")
+            Log.w(TAG, "  URL: ${urlForLog(urlStr)}")
             fallback(straightDist)
         }
     }

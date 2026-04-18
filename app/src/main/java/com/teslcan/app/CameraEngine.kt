@@ -48,8 +48,14 @@ class CameraEngine(
         private const val PASS_DISTANCE = 50.0
 
         private const val AHEAD_ANGLE = 40.0
-        /** 차량→카메라 방위가 진행 방향과 이 각도(°) 이내면 전방으로 간주(heading 미상 CSV 대비 완화) */
-        private const val FORWARD_TO_CAM_DEG = 60.0
+        /** 차량→카메라 방위가 진행 방향과 이 각도(°) 이내면 전방(도시부 측면 카메라 억제) */
+        private const val FORWARD_TO_CAM_DEG = 40.0
+
+        /** 라우팅 API 실패 시 직선 fallback — 매우 보수적(평행도로 오탐 방지) */
+        private const val FALLBACK_MAX_STRAIGHT_M = 300.0
+        private const val FALLBACK_MAX_ANGLE_DEG = 25.0
+        private const val FALLBACK_APPROACH_TICKS = 3
+        private const val FALLBACK_PENDING_DIVERGE_M = 20.0
         private const val BEHIND_ANGLE = 110.0
         private const val MIN_SPEED_FOR_BEARING = 5
         private const val MIN_MOVE_FOR_BEARING = 5.0
@@ -106,6 +112,11 @@ class CameraEngine(
     private var sectionEntryTime = 0L
     private var sectionDistance = 0.0
 
+    /** heading 미상 + API 실패 시: 직선·각도 조건 통과 후 N틱 연속 접근 시에만 추적 시작 */
+    private var pendingFallbackCam: CameraRecord? = null
+    private var pendingFallbackLastDist = Double.MAX_VALUE
+    private var pendingApproachTicks = 0
+
     /** 시뮬 등에서만 사용. null이면 내부 베어링(이동 벡터) 사용. */
     var bearingOverrideDeg: Float? = null
 
@@ -125,6 +136,7 @@ class CameraEngine(
         sectionEntry = null
         sectionEntryTime = 0L
         sectionDistance = 0.0
+        clearPendingFallback()
     }
 
     private fun resetTracking() {
@@ -137,6 +149,32 @@ class CameraEngine(
         recedeCount = 0
         trackingStartMs = 0L
         zoneFired.clear()
+        clearPendingFallback()
+    }
+
+    private fun clearPendingFallback() {
+        pendingFallbackCam = null
+        pendingFallbackLastDist = Double.MAX_VALUE
+        pendingApproachTicks = 0
+    }
+
+    private fun applyTrackingStart(cam: CameraRecord, route: MapboxRouter.RouteResult, straightM: Double) {
+        trackingCamera = cam
+        cachedRoute = route
+        minDistReached = route.roadDistance
+        lastDist = route.roadDistance
+        approachCount = 0
+        recedeCount = 0
+        zoneFired.clear()
+        trackingStartMs = System.currentTimeMillis()
+        sectionEntry = null
+        sectionEntryTime = 0L
+        sectionDistance = 0.0
+        Log.d(
+            TAG,
+            "추적시작: ${straightM.toInt()}m→${route.roadDistance.toInt()}m " +
+                "${cam.safetyCode.label} limit=${cam.speedLimit} heading=${cam.direction?.toInt() ?: -1}°"
+        )
     }
 
     fun check(
@@ -168,8 +206,59 @@ class CameraEngine(
         if (trackingCamera != null) {
             return updateTracking(lat, lon, speedKmh, overThreshold, now)
         }
+        if (pendingFallbackCam != null) {
+            if (tickPendingFallback(lat, lon, now)) {
+                return updateTracking(lat, lon, speedKmh, overThreshold, now)
+            }
+            if (pendingFallbackCam != null) return null
+        }
         if (routeRequestInProgress) return null
         return findAheadCamera(lat, lon, speedKmh, overThreshold)
+    }
+
+    /**
+     * @return true 이면 이번 틱에 추적이 시작됐으므로 호출측에서 updateTracking을 이어서 호출.
+     */
+    private fun tickPendingFallback(lat: Double, lon: Double, @Suppress("UNUSED_PARAMETER") now: Long): Boolean {
+        val cam = pendingFallbackCam ?: return false
+        if (!bearingValid) {
+            Log.d(TAG, "fallback pending 취소: bearing 미확인")
+            clearPendingFallback()
+            return false
+        }
+        val d = distanceBetween(lat, lon, cam.lat, cam.lon)
+        val diffToCam = angleDiff(currentBearing, bearingBetween(lat, lon, cam.lat, cam.lon))
+        if (d > FALLBACK_MAX_STRAIGHT_M + 80.0 || diffToCam > FALLBACK_MAX_ANGLE_DEG + 15.0) {
+            Log.d(TAG, "fallback pending 취소: dist=${d.toInt()}m angle=${"%.0f".format(Locale.US, diffToCam)}°")
+            clearPendingFallback()
+            return false
+        }
+        if (d > pendingFallbackLastDist + FALLBACK_PENDING_DIVERGE_M) {
+            Log.d(TAG, "fallback pending 취소: 이탈(+${FALLBACK_PENDING_DIVERGE_M.toInt()}m) dist=${d.toInt()}m")
+            clearPendingFallback()
+            return false
+        }
+        if (d < pendingFallbackLastDist - 3.0) {
+            pendingApproachTicks++
+            pendingFallbackLastDist = d
+            Log.d(
+                TAG,
+                "  fallback pending 접근 ${pendingApproachTicks}/$FALLBACK_APPROACH_TICKS dist=${d.toInt()}m"
+            )
+            if (pendingApproachTicks >= FALLBACK_APPROACH_TICKS) {
+                val fd = d * 1.3
+                val route = MapboxRouter.RouteResult(
+                    roadDistance = fd,
+                    straightDistance = d,
+                    routePoints = emptyList(),
+                    success = false
+                )
+                clearPendingFallback()
+                applyTrackingStart(cam, route, d)
+                return true
+            }
+        }
+        return false
     }
 
     private fun updateBearingInternal(lat: Double, lon: Double, speedKmh: Int) {
@@ -289,6 +378,7 @@ class CameraEngine(
             var bestCam: CameraRecord? = null
             var bestRoute: MapboxRouter.RouteResult? = null
             var bestStraight = 0.0
+            var pendingUnknownHeading: Candidate? = null
 
             for (candidate in topCandidates) {
                 val route = router.getRoute(curLat, curLon, candidate.cam.lat, candidate.cam.lon, candidate.dist)
@@ -328,9 +418,22 @@ class CameraEngine(
                 } else {
                     val fd = candidate.dist * 1.3
                     Log.d(TAG, "  API 실패 → 직선 fallback ${candidate.dist.toInt()}m (도로산 ${fd.toInt()}m)")
-                    val allowFallback = candidate.dist <= ALERT_DISTANCE &&
-                        (!curBearingValid || candidate.angleDiff <= AHEAD_ANGLE)
-                    if (allowFallback) {
+                    val allowFallback = candidate.dist <= FALLBACK_MAX_STRAIGHT_M &&
+                        curBearingValid &&
+                        candidate.angleDiff <= FALLBACK_MAX_ANGLE_DEG
+                    if (!allowFallback) {
+                        Log.d(
+                            TAG,
+                            "  → fallback 기각 dist=${candidate.dist.toInt()}m(기준${
+                                FALLBACK_MAX_STRAIGHT_M.toInt()
+                            }m) angle=${"%.0f".format(Locale.US, candidate.angleDiff)}°(기준${
+                                FALLBACK_MAX_ANGLE_DEG.toInt()
+                            }°) bearingValid=$curBearingValid"
+                        )
+                        continue
+                    }
+                    val camHeading = candidate.cam.direction?.toInt() ?: -1
+                    if (camHeading >= 0) {
                         bestCam = candidate.cam
                         bestRoute = MapboxRouter.RouteResult(
                             roadDistance = fd,
@@ -341,39 +444,34 @@ class CameraEngine(
                         bestStraight = candidate.dist
                         Log.d(
                             TAG,
-                            "  → fallback 확정! ${fd.toInt()}m (각도 ${"%.0f".format(Locale.US, candidate.angleDiff)}°)"
+                            "  → fallback 확정! ${fd.toInt()}m (각도 ${"%.0f".format(Locale.US, candidate.angleDiff)}° heading≥0)"
                         )
                         break
-                    } else {
-                        Log.d(
-                            TAG,
-                            "  → fallback 기각 dist=${candidate.dist.toInt()}m angle=${
-                                "%.0f".format(Locale.US, candidate.angleDiff)
-                            }° (베어링유효=$curBearingValid)"
-                        )
                     }
+                    pendingUnknownHeading = candidate
+                    Log.d(
+                        TAG,
+                        "  → fallback 등록(heading 미상): 접근 ${FALLBACK_APPROACH_TICKS}틱 확인 후 확정"
+                    )
+                    break
                 }
             }
 
             Handler(Looper.getMainLooper()).post {
                 routeRequestInProgress = false
-                if (bestCam != null && bestRoute != null) {
-                    trackingCamera = bestCam
-                    cachedRoute = bestRoute
-                    minDistReached = bestRoute.roadDistance
-                    lastDist = bestRoute.roadDistance
-                    approachCount = 0
-                    recedeCount = 0
-                    zoneFired.clear()
-                    trackingStartMs = System.currentTimeMillis()
-                    sectionEntry = null
-                    sectionEntryTime = 0L
-                    sectionDistance = 0.0
+                val pickedCam = bestCam
+                val pickedRoute = bestRoute
+                if (pickedCam != null && pickedRoute != null) {
+                    applyTrackingStart(pickedCam, pickedRoute, bestStraight)
+                } else if (pendingUnknownHeading != null) {
+                    val c = pendingUnknownHeading!!
+                    pendingFallbackCam = c.cam
+                    pendingFallbackLastDist = c.dist
+                    pendingApproachTicks = 0
                     Log.d(
                         TAG,
-                        "추적시작: ${bestStraight.toInt()}m→${bestRoute.roadDistance.toInt()}m " +
-                            "${bestCam.safetyCode.label} limit=${bestCam.speedLimit} " +
-                            "heading=${bestCam.direction?.toInt() ?: -1}°"
+                        "fallback pending 등록 0/$FALLBACK_APPROACH_TICKS 직선=${c.dist.toInt()}m " +
+                            "${c.cam.safetyCode.label}"
                     )
                 } else {
                     Log.d(TAG, "적합 카메라 없음 (${topCandidates.size}개 검토)")
